@@ -54,12 +54,13 @@ const GLOBAL_STYLE = `
   @keyframes glow { 0%,100%{box-shadow:0 0 0 0 rgba(0,229,255,0)} 50%{box-shadow:0 0 16px 4px rgba(0,229,255,0.2)} }
   @keyframes scan { from{transform:translateY(-100%)} to{transform:translateY(100vh)} }
   @keyframes critPulse { 0%,100%{background:rgba(255,82,82,0.05)} 50%{background:rgba(255,82,82,0.12)} }
+  @keyframes shimmer { 0%{background-position:-200% 0} 100%{background-position:200% 0} }
   .fade-up { animation: fadeUp .35s ease both; }
   .slide-r { animation: slideR .25s ease both; }
 `;
 
 /* ─── UTILITY COMPONENTS ─────────────────────────────────────────────────────── */
-const Badge = ({ children, color = T.cyan, dim }) => (
+const Badge = ({ children, color = T.cyan }) => (
   <span style={{
     fontFamily: F.mono, fontSize: 9, fontWeight: 600,
     letterSpacing: 1.5, textTransform: "uppercase",
@@ -104,6 +105,14 @@ const Btn = ({ children, onClick, variant = "primary", style: sx = {}, disabled 
     danger: {
       background: `${T.red}15`, color: T.red,
       border: `1px solid ${T.red}40`,
+    },
+    success: {
+      background: `${T.green}15`, color: T.green,
+      border: `1px solid ${T.green}40`,
+    },
+    amber: {
+      background: `${T.amber}15`, color: T.amber,
+      border: `1px solid ${T.amber}40`,
     },
   };
   return (
@@ -203,6 +212,24 @@ async function callAPI(endpoint, params = {}) {
   return res.json();
 }
 
+async function callClaude(systemPrompt, userMessage, maxTokens = 1000) {
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [{ role: "user", content: userMessage }],
+    }),
+  });
+  const data = await response.json();
+  const text = data.content?.map(b => b.text || "").join("") || "";
+  const clean = text.replace(/```json|```/g, "").trim();
+  try { return JSON.parse(clean); }
+  catch { const m = clean.match(/[\[{][\s\S]*[\]}]/); return m ? JSON.parse(m[0]) : clean; }
+}
+
 /* ─── CONSTANTS ─────────────────────────────────────────────────────────────── */
 const ALL_CITIES = ["Mumbai","Delhi","Chennai","Kolkata","Bangalore","Ahmedabad","Hyderabad","Jaipur","Lucknow","Pune"];
 const NEAREST_HUB = { Chennai:"Bangalore", Kolkata:"Hyderabad", Ahmedabad:"Mumbai", Jaipur:"Delhi", Lucknow:"Delhi", Hyderabad:"Chennai", Pune:"Mumbai", Bangalore:"Chennai", Mumbai:"Delhi", Delhi:"Mumbai" };
@@ -220,6 +247,12 @@ const REAL_SKUS = [
 ];
 const UNIT_PRICES = { "PROD_001": 4500, "PROD_002": 12000, "PROD_003": 800 };
 const MARGIN = 0.28;
+const PRODUCT_NAMES = { "PROD_001": "Steel Rods 12mm", "PROD_002": "Electronic Capacitors", "PROD_003": "Cotton Fabric XL" };
+const SUPPLIERS = {
+  "PROD_001": { name: "SteelCraft Industries", contact: "Ravi Kumar", leadTime: 5, reliability: 92 },
+  "PROD_002": { name: "ElectroParts Pvt Ltd",  contact: "Anita Shah",  leadTime: 7, reliability: 88 },
+  "PROD_003": { name: "TextilePro Exports",    contact: "Meera Iyer",  leadTime: 4, reliability: 95 },
+};
 
 function calcDisruptionScore(delayProb, inventoryAnomalyScore, daysToStockout, routeAnomalyFlag) {
   const delayNorm = Math.min(100, delayProb || 0);
@@ -250,13 +283,17 @@ const RISK_COLOR = (score) => score > 70 ? T.red : score > 45 ? T.amber : T.gree
 
 /* ─── NAV ────────────────────────────────────────────────────────────────────── */
 const NAV = [
-  { id:"command",  label:"Command Center",   icon:"◈" },
-  { id:"radar",    label:"Disruption Radar", icon:"◉" },
-  { id:"cascade",  label:"Impact Cascade",   icon:"⊕" },
-  { id:"stockout", label:"Stockout Shield",  icon:"▦" },
-  { id:"revenue",  label:"Revenue Guard",    icon:"₹" },
-  { id:"agent",    label:"Resilience Agent", icon:"⚡" },
+  { id:"command",   label:"Command Center",    icon:"◈" },
+  { id:"radar",     label:"Disruption Radar",  icon:"◉" },
+  { id:"cascade",   label:"Impact Cascade",    icon:"⊕" },
+  { id:"stockout",  label:"Stockout Shield",   icon:"▦" },
+  { id:"revenue",   label:"Revenue Guard",     icon:"₹" },
+  { id:"agent",     label:"Resilience Agent",  icon:"⚡" },
+  { id:"reorder",   label:"Reorder Agent",     icon:"📋", isNew: true },
+  { id:"expiry",    label:"Expiry Tracker",    icon:"⏳", isNew: true },
+  { id:"transfer",  label:"Transfer Optimizer",icon:"⇄",  isNew: true },
 ];
+
 const ROLES = [
   { id:"admin",             label:"System Admin",       icon:"🛠", desc:"Full Access" },
   { id:"analytics_officer", label:"Analytics Officer",  icon:"📊", desc:"Reports & KPIs" },
@@ -281,35 +318,15 @@ function NetworkMap({ disruptions = [] }) {
   ];
   const E = [[0,1],[0,2],[0,4],[1,4],[2,3],[3,9],[4,5],[5,6],[5,7],[6,7],[6,8],[7,8],[7,9],[8,9]];
   const disruptedCities = new Set(disruptions.map(d => d.city));
-
   return (
     <div style={{ position:"relative", width:"100%", height:"100%", background:T.bgPanel, borderRadius:10, overflow:"hidden", border:`1px solid ${T.border}` }}>
       <div style={{ position:"absolute", top:10, left:12, fontFamily:F.mono, fontSize:8, letterSpacing:2, color:T.textDim }}>RESILIENCE NETWORK — PAN INDIA</div>
       <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet" style={{ position:"absolute", inset:0 }}>
-        {[20,40,60,80].map(v => <g key={v}>
-          <line x1={v} y1="5" x2={v} y2="95" stroke={T.border} strokeWidth=".4"/>
-          <line x1="5" y1={v} x2="95" y2={v} stroke={T.border} strokeWidth=".4"/>
-        </g>)}
-        {E.map(([a, b], i) => {
-          const aD = disruptedCities.has(N[a].l), bD = disruptedCities.has(N[b].l);
-          const edgeColor = aD || bD ? T.red : T.cyanDim;
-          return <line key={i} x1={N[a].x} y1={N[a].y} x2={N[b].x} y2={N[b].y} stroke={edgeColor} strokeWidth={aD||bD?"1.2":"0.6"} strokeDasharray={aD||bD?"none":"1.5,1.5"} opacity={aD||bD?".8":".3"}/>;
-        })}
+        {[20,40,60,80].map(v => <g key={v}><line x1={v} y1="5" x2={v} y2="95" stroke={T.border} strokeWidth=".4"/><line x1="5" y1={v} x2="95" y2={v} stroke={T.border} strokeWidth=".4"/></g>)}
+        {E.map(([a, b], i) => { const aD = disruptedCities.has(N[a].l), bD = disruptedCities.has(N[b].l); const edgeColor = aD || bD ? T.red : T.cyanDim; return <line key={i} x1={N[a].x} y1={N[a].y} x2={N[b].x} y2={N[b].y} stroke={edgeColor} strokeWidth={aD||bD?"1.2":"0.6"} strokeDasharray={aD||bD?"none":"1.5,1.5"} opacity={aD||bD?".8":".3"}/>; })}
         <circle r="1.4" fill={T.cyan} opacity=".9"><animateMotion dur="6s" repeatCount="indefinite" path={`M${N[0].x},${N[0].y} L${N[5].x},${N[5].y}`}/></circle>
         <circle r="1.4" fill={T.cyan} opacity=".7"><animateMotion dur="7.5s" repeatCount="indefinite" path={`M${N[4].x},${N[4].y} L${N[8].x},${N[8].y}`}/></circle>
-        {N.map((n, i) => {
-          const isD = disruptedCities.has(n.l);
-          const lx = n.anchor==="start"?n.x+3.5:n.anchor==="end"?n.x-3.5:n.x;
-          const ly = n.dy?n.y+n.dy:(n.anchor==="middle"?n.y-3:n.y+0.5);
-          return (
-            <g key={i}>
-              {isD && <circle cx={n.x} cy={n.y} r="5" fill={T.red} opacity=".15"><animate attributeName="r" values="3;6;3" dur="2s" repeatCount="indefinite"/></circle>}
-              <circle cx={n.x} cy={n.y} r="2.4" fill={isD?T.red:T.cyan} opacity={isD?1:.7}/>
-              <circle cx={n.x} cy={n.y} r="1" fill={isD?"#ff9999":"#0A0D11"} opacity=".9"/>
-              <text x={lx} y={ly} fontSize="3.2" fill={isD?T.red:T.textMuted} fontFamily="monospace" fontWeight="600" textAnchor={n.anchor}>{n.l}</text>
-            </g>
-          );
-        })}
+        {N.map((n, i) => { const isD = disruptedCities.has(n.l); const lx = n.anchor==="start"?n.x+3.5:n.anchor==="end"?n.x-3.5:n.x; const ly = n.dy?n.y+n.dy:(n.anchor==="middle"?n.y-3:n.y+0.5); return (<g key={i}>{isD && <circle cx={n.x} cy={n.y} r="5" fill={T.red} opacity=".15"><animate attributeName="r" values="3;6;3" dur="2s" repeatCount="indefinite"/></circle>}<circle cx={n.x} cy={n.y} r="2.4" fill={isD?T.red:T.cyan} opacity={isD?1:.7}/><circle cx={n.x} cy={n.y} r="1" fill={isD?"#ff9999":"#0A0D11"} opacity=".9"/><text x={lx} y={ly} fontSize="3.2" fill={isD?T.red:T.textMuted} fontFamily="monospace" fontWeight="600" textAnchor={n.anchor}>{n.l}</text></g>); })}
       </svg>
     </div>
   );
@@ -318,71 +335,38 @@ function NetworkMap({ disruptions = [] }) {
 /* ─── LOGIN PAGE ─────────────────────────────────────────────────────────────── */
 function LoginPage({ onSwitch, onLogin }) {
   const [email, setEmail] = useState(""); const [pass, setPass] = useState(""); const [err, setErr] = useState("");
-
   const inp = { width:"100%", padding:"11px 14px", background:T.bgInput, border:`1px solid ${T.border}`, borderRadius:8, fontSize:13, outline:"none", fontFamily:F.mono, color:T.text, boxSizing:"border-box", letterSpacing:.5 };
-
   return (
     <div style={{ display:"flex", height:"100vh", background:T.bg, position:"relative", overflow:"hidden" }}>
-      {/* Scan line */}
       <div style={{ position:"absolute", top:0, left:0, width:"100%", height:1, background:`linear-gradient(90deg, transparent, ${T.cyan}40, transparent)`, animation:"scan 8s linear infinite", zIndex:0 }}/>
-
-      {/* Left panel */}
       <div style={{ width:"42%", background:T.bgPanel, borderRight:`1px solid ${T.border}`, display:"flex", flexDirection:"column", justifyContent:"center", padding:"64px 56px", position:"relative", overflow:"hidden", zIndex:1 }}>
         <svg style={{ position:"absolute", inset:0, width:"100%", height:"100%", opacity:.04 }}><defs><pattern id="grid" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke={T.cyan} strokeWidth="0.5"/></pattern></defs><rect width="100%" height="100%" fill="url(#grid)"/></svg>
         <div style={{ position:"relative", zIndex:1 }}>
           <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:48 }}>
             <div style={{ width:36, height:36, borderRadius:8, background:`${T.cyan}15`, border:`1px solid ${T.cyanDim}40`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18 }}>⛓</div>
-            <div>
-              <div style={{ fontFamily:F.display, color:T.text, fontWeight:700, fontSize:13, letterSpacing:.5 }}>Resilience Intelligence</div>
-              <div style={{ fontFamily:F.mono, color:T.textDim, fontSize:9, letterSpacing:2 }}>PAN INDIA · SUPPLY CHAIN AI</div>
-            </div>
+            <div><div style={{ fontFamily:F.display, color:T.text, fontWeight:700, fontSize:13, letterSpacing:.5 }}>Resilience Intelligence</div><div style={{ fontFamily:F.mono, color:T.textDim, fontSize:9, letterSpacing:2 }}>PAN INDIA · SUPPLY CHAIN AI</div></div>
           </div>
-
-          <div style={{ fontFamily:F.display, color:T.text, fontSize:34, fontWeight:700, lineHeight:1.15, marginBottom:12 }}>
-            Detect.<br/><span style={{ color:T.cyan }}>Model.</span><br/>Prevent.
-          </div>
-          <div style={{ fontFamily:F.body, color:T.textMuted, fontSize:14, lineHeight:1.8, maxWidth:300, marginBottom:40 }}>
-            AI-powered supply chain resilience — detect disruptions early, model downstream impact, protect revenue.
-          </div>
-
-          {[
-            ["🚨","Early Warning","Proactive disruption detection"],
-            ["🌊","Cascade Intelligence","Multi-hop impact modelling"],
-            ["⚡","Resilience Agent","10 live ML tools, one interface"],
-          ].map(([ic,t,d]) => (
+          <div style={{ fontFamily:F.display, color:T.text, fontSize:34, fontWeight:700, lineHeight:1.15, marginBottom:12 }}>Detect.<br/><span style={{ color:T.cyan }}>Model.</span><br/>Prevent.</div>
+          <div style={{ fontFamily:F.body, color:T.textMuted, fontSize:14, lineHeight:1.8, maxWidth:300, marginBottom:40 }}>AI-powered supply chain resilience — detect disruptions early, model downstream impact, protect revenue.</div>
+          {[["🚨","Early Warning","Proactive disruption detection"],["🌊","Cascade Intelligence","Multi-hop impact modelling"],["⚡","Resilience Agent","10 live ML tools, one interface"]].map(([ic,t,d]) => (
             <div key={t} style={{ display:"flex", alignItems:"center", gap:14, marginBottom:16 }}>
               <div style={{ width:38, height:38, borderRadius:9, background:`${T.cyan}08`, border:`1px solid ${T.border}`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16, flexShrink:0 }}>{ic}</div>
-              <div>
-                <div style={{ fontFamily:F.display, color:T.text, fontWeight:600, fontSize:13 }}>{t}</div>
-                <div style={{ fontFamily:F.body, color:T.textMuted, fontSize:11.5 }}>{d}</div>
-              </div>
+              <div><div style={{ fontFamily:F.display, color:T.text, fontWeight:600, fontSize:13 }}>{t}</div><div style={{ fontFamily:F.body, color:T.textMuted, fontSize:11.5 }}>{d}</div></div>
             </div>
           ))}
         </div>
       </div>
-
-      {/* Right panel */}
       <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", padding:48, zIndex:1 }}>
         <div style={{ width:"100%", maxWidth:400 }}>
-          <div style={{ marginBottom:36 }}>
-            <div style={{ fontFamily:F.display, fontSize:28, fontWeight:700, color:T.text, marginBottom:6 }}>Welcome back</div>
-            <div style={{ fontFamily:F.body, color:T.textMuted, fontSize:13 }}>Sign in to your Resilience Dashboard</div>
-          </div>
+          <div style={{ marginBottom:36 }}><div style={{ fontFamily:F.display, fontSize:28, fontWeight:700, color:T.text, marginBottom:6 }}>Welcome back</div><div style={{ fontFamily:F.body, color:T.textMuted, fontSize:13 }}>Sign in to your Resilience Dashboard</div></div>
           {err && <div style={{ background:`${T.red}10`, border:`1px solid ${T.red}30`, color:T.red, borderRadius:8, padding:"10px 14px", fontFamily:F.mono, fontSize:11, marginBottom:16 }}>{err}</div>}
           <div style={{ display:"flex", flexDirection:"column", gap:16, marginBottom:20 }}>
             {[["EMAIL","email",email,setEmail,"admin@scs.in"],["PASSWORD","password",pass,setPass,"••••••••"]].map(([lbl,type,val,set,ph]) => (
-              <div key={lbl}>
-                <label style={{ fontFamily:F.mono, fontSize:9, fontWeight:600, color:T.textDim, display:"block", marginBottom:6, letterSpacing:1.5 }}>{lbl}</label>
-                <input value={val} onChange={e=>set(e.target.value)} type={type} placeholder={ph} style={inp} onFocus={e=>e.target.style.borderColor=T.cyan} onBlur={e=>e.target.style.borderColor=T.border}/>
-              </div>
+              <div key={lbl}><label style={{ fontFamily:F.mono, fontSize:9, fontWeight:600, color:T.textDim, display:"block", marginBottom:6, letterSpacing:1.5 }}>{lbl}</label><input value={val} onChange={e=>set(e.target.value)} type={type} placeholder={ph} style={inp} onFocus={e=>e.target.style.borderColor=T.cyan} onBlur={e=>e.target.style.borderColor=T.border}/></div>
             ))}
           </div>
-          <button onClick={() => { if(!email||!pass){setErr("All fields required.");return;} onLogin({name:"Admin User",email,role:"admin"}); }} style={{ width:"100%", padding:"13px", background:`linear-gradient(135deg, ${T.cyanDim}22, ${T.cyan}15)`, color:T.cyan, border:`1px solid ${T.cyan}60`, borderRadius:9, fontFamily:F.mono, fontSize:12, fontWeight:600, letterSpacing:1, cursor:"pointer", boxShadow:`0 0 20px ${T.cyanGlow}` }}>
-            INITIALIZE SESSION →
-          </button>
-          <div style={{ textAlign:"center", marginTop:24, fontFamily:F.body, fontSize:13, color:T.textMuted }}>
-            No account? <span onClick={onSwitch} style={{ color:T.cyan, fontWeight:600, cursor:"pointer" }}>Create one</span>
-          </div>
+          <button onClick={() => { if(!email||!pass){setErr("All fields required.");return;} onLogin({name:"Admin User",email,role:"admin"}); }} style={{ width:"100%", padding:"13px", background:`linear-gradient(135deg, ${T.cyanDim}22, ${T.cyan}15)`, color:T.cyan, border:`1px solid ${T.cyan}60`, borderRadius:9, fontFamily:F.mono, fontSize:12, fontWeight:600, letterSpacing:1, cursor:"pointer", boxShadow:`0 0 20px ${T.cyanGlow}` }}>INITIALIZE SESSION →</button>
+          <div style={{ textAlign:"center", marginTop:24, fontFamily:F.body, fontSize:13, color:T.textMuted }}>No account? <span onClick={onSwitch} style={{ color:T.cyan, fontWeight:600, cursor:"pointer" }}>Create one</span></div>
           <div style={{ marginTop:24, padding:"14px 16px", background:T.bgCard, borderRadius:10, border:`1px solid ${T.border}` }}>
             <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginBottom:6, letterSpacing:1.5 }}>DEMO CREDENTIALS</div>
             <div style={{ fontFamily:F.mono, fontSize:12, color:T.text }}>admin@scs.in · demo123</div>
@@ -404,14 +388,7 @@ function RegisterPage({ onSwitch, onLogin }) {
           <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:52 }}><span style={{ fontSize:20 }}>⛓</span><div style={{ fontFamily:F.display, color:T.text, fontWeight:700, fontSize:13 }}>Resilience Intelligence</div></div>
           <div style={{ fontFamily:F.display, color:T.text, fontSize:26, fontWeight:700, lineHeight:1.25, marginBottom:10 }}>Join India's<br/>Resilience Network</div>
         </div>
-        <div>
-          {["Select Your Role","Your Details","Set Password"].map((l,i) => { const n=i+1; const done=step>n; const on=step===n; return (
-            <div key={l} style={{ display:"flex", alignItems:"center", gap:14, marginBottom:14 }}>
-              <div style={{ width:28, height:28, borderRadius:"50%", background:done?T.cyanGlow:on?`${T.cyan}15`:`${T.border}`, border:on?`1px solid ${T.cyan}`:"1px solid transparent", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F.mono, fontSize:10, fontWeight:700, color:done?T.cyan:on?T.cyan:T.textDim }}>{done?"✓":String(n).padStart(2,"0")}</div>
-              <span style={{ fontFamily:F.mono, fontSize:12, color:on?T.text:T.textDim, letterSpacing:.5 }}>{l}</span>
-            </div>
-          );})}
-        </div>
+        <div>{["Select Your Role","Your Details","Set Password"].map((l,i) => { const n=i+1; const done=step>n; const on=step===n; return (<div key={l} style={{ display:"flex", alignItems:"center", gap:14, marginBottom:14 }}><div style={{ width:28, height:28, borderRadius:"50%", background:done?T.cyanGlow:on?`${T.cyan}15`:`${T.border}`, border:on?`1px solid ${T.cyan}`:"1px solid transparent", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:F.mono, fontSize:10, fontWeight:700, color:done?T.cyan:on?T.cyan:T.textDim }}>{done?"✓":String(n).padStart(2,"0")}</div><span style={{ fontFamily:F.mono, fontSize:12, color:on?T.text:T.textDim, letterSpacing:.5 }}>{l}</span></div>); })}</div>
       </div>
       <div style={{ flex:1, display:"flex", alignItems:"center", justifyContent:"center", padding:52 }}>
         <div style={{ width:"100%", maxWidth:500 }}>
@@ -484,19 +461,15 @@ function CommandCenter({ onNav }) {
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:8, background:probeLoading?`${T.amber}10`:active>0?`${T.red}10`:`${T.green}10`, border:`1px solid ${probeLoading?T.amber:active>0?T.red:T.green}30`, borderRadius:8, padding:"8px 16px" }}>
           <StatusDot color={probeLoading?T.amber:active>0?T.red:T.green} pulse={probeLoading}/>
-          <span style={{ fontFamily:F.mono, fontSize:9, color:probeLoading?T.amber:active>0?T.red:T.green, letterSpacing:1.5 }}>
-            {probeLoading ? "SCANNING NETWORK…" : active>0 ? `${active} DISRUPTIONS DETECTED` : "ALL CORRIDORS NOMINAL"}
-          </span>
+          <span style={{ fontFamily:F.mono, fontSize:9, color:probeLoading?T.amber:active>0?T.red:T.green, letterSpacing:1.5 }}>{probeLoading ? "SCANNING NETWORK…" : active>0 ? `${active} DISRUPTIONS DETECTED` : "ALL CORRIDORS NOMINAL"}</span>
         </div>
       </div>
-
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:24 }}>
         <MetricCard label="Network Resilience Score" value={resScore!=null?`${resScore}/100`:"—"} sub="Live weighted score across corridors" icon="🛡" accent={T.cyan} loading={probeLoading} onClick={() => !probeLoading && onNav("radar")}/>
         <MetricCard label="Revenue at Risk (30d)" value={revenueRisk!=null?`₹${(revenueRisk/100000).toFixed(1)}L`:"—"} sub="Stockout exposure × margin" icon="₹" accent={T.red} loading={probeLoading} onClick={() => !probeLoading && onNav("revenue")}/>
         <MetricCard label="Active Disruption Alerts" value={probeLoading?"—":String(active)} sub="Corridors with score > 45" icon="🚨" accent={active>0?T.red:T.green} loading={probeLoading} onClick={() => !probeLoading && onNav("radar")}/>
         <MetricCard label="Highest Risk Corridor" value={probeLoading?"—":probeAlerts.length>0?`${probeAlerts[0].score}/100`:"—"} sub={probeAlerts.length>0?probeAlerts[0].route:"No high-risk corridors"} icon="⚠" accent={T.amber} loading={probeLoading} onClick={() => !probeLoading && onNav("cascade")}/>
       </div>
-
       <div style={{ display:"grid", gridTemplateColumns:"1.5fr 1fr", gap:18, marginBottom:18 }}>
         <Panel>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
@@ -505,7 +478,6 @@ function CommandCenter({ onNav }) {
           </div>
           <div style={{ height:220 }}><NetworkMap disruptions={disruptions}/></div>
         </Panel>
-
         <Panel>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
             <div style={{ fontFamily:F.display, fontWeight:600, color:T.text, fontSize:14 }}>Proactive Alerts</div>
@@ -521,9 +493,7 @@ function CommandCenter({ onNav }) {
                 <StatusDot color={a.score>70?T.red:T.amber}/>
                 <div style={{ flex:1 }}>
                   <div style={{ fontFamily:F.display, fontSize:12.5, color:T.text, fontWeight:600 }}>{a.route}</div>
-                  <div style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted, marginTop:2, letterSpacing:.3 }}>
-                    Score: {a.score}/100 · Delay: {(a.delayProb||0).toFixed(0)}%{a.days!=null&&` · ${a.days.toFixed(1)}d to stockout`}
-                  </div>
+                  <div style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted, marginTop:2, letterSpacing:.3 }}>Score: {a.score}/100 · Delay: {(a.delayProb||0).toFixed(0)}%{a.days!=null&&` · ${a.days.toFixed(1)}d to stockout`}</div>
                 </div>
                 <Badge color={a.score>70?T.red:T.amber}>{a.score>70?"HIGH":"MED"}</Badge>
               </div>
@@ -532,7 +502,6 @@ function CommandCenter({ onNav }) {
           {probeAlerts.length>0 && <div onClick={() => onNav("radar")} style={{ fontFamily:F.mono, fontSize:10, color:T.cyan, cursor:"pointer", textAlign:"center", marginTop:10, letterSpacing:1 }}>VIEW ALL IN DISRUPTION RADAR →</div>}
         </Panel>
       </div>
-
       <Panel>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
           <div>
@@ -599,7 +568,6 @@ function DisruptionRadar() {
         </div>
       </div>
       {scanning && <div style={{ marginBottom:20 }}><Spinner label="SCANNING ALL 10 SUPPLIER CITIES…"/></div>}
-
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:18, marginBottom:18 }}>
         <Panel>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
@@ -624,7 +592,6 @@ function DisruptionRadar() {
             </div>
           ))}
         </Panel>
-
         <Panel>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
             <div style={{ fontFamily:F.display, fontWeight:600, color:T.text, fontSize:14 }}>Supplier Health Scores</div>
@@ -634,8 +601,7 @@ function DisruptionRadar() {
             {ALL_CITIES.map(city => {
               if (!scanned) return (
                 <div key={city} style={{ display:"flex", alignItems:"center", gap:12, padding:"9px 12px", background:T.bgPanel, borderRadius:8, border:`1px solid ${T.border}` }}>
-                  <StatusDot color={T.textDim}/>
-                  <span style={{ fontFamily:F.mono, fontSize:12, color:T.textMuted, flex:1 }}>{city}</span>
+                  <StatusDot color={T.textDim}/><span style={{ fontFamily:F.mono, fontSize:12, color:T.textMuted, flex:1 }}>{city}</span>
                   <span style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, letterSpacing:1 }}>NOT SCANNED</span>
                 </div>
               );
@@ -655,9 +621,7 @@ function DisruptionRadar() {
                     </div>
                   </div>
                   <div style={{ background:`${rc}20`, borderRadius:20, height:3, marginBottom:5 }}><div style={{ width:`${Math.min(100,s.score||0)}%`, height:"100%", background:rc, borderRadius:20 }}/></div>
-                  <div style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted, letterSpacing:.3 }}>
-                    Delay: {(s.delayProb||0).toFixed(1)}% · Anomaly: {s.isAnomaly?"⚠ Yes":"✓ No"}{s.daysToStockout!=null&&` · ${s.daysToStockout.toFixed(1)}d to stockout`}
-                  </div>
+                  <div style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted, letterSpacing:.3 }}>Delay: {(s.delayProb||0).toFixed(1)}% · Anomaly: {s.isAnomaly?"⚠ Yes":"✓ No"}{s.daysToStockout!=null&&` · ${s.daysToStockout.toFixed(1)}d to stockout`}</div>
                 </div>
               );
             })}
@@ -724,11 +688,7 @@ function ImpactCascade() {
           </div>
           <div style={{ padding:18, height:300 }}>
             <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet">
-              {EDGES.map(([a,b], i) => {
-                const aPos = CITY_POS[a]; const bPos = CITY_POS[b];
-                const isAffected = affectedNodes.has(a) && affectedNodes.has(b);
-                return <line key={i} x1={aPos.x} y1={aPos.y} x2={bPos.x} y2={bPos.y} stroke={isAffected?T.red:T.cyanDim} strokeWidth={isAffected?"1.5":"0.5"} opacity={isAffected?".9":".25"} strokeDasharray={isAffected?"none":"2,2"}/>;
-              })}
+              {EDGES.map(([a,b], i) => { const aPos = CITY_POS[a]; const bPos = CITY_POS[b]; const isAffected = affectedNodes.has(a) && affectedNodes.has(b); return <line key={i} x1={aPos.x} y1={aPos.y} x2={bPos.x} y2={bPos.y} stroke={isAffected?T.red:T.cyanDim} strokeWidth={isAffected?"1.5":"0.5"} opacity={isAffected?".9":".25"} strokeDasharray={isAffected?"none":"2,2"}/>; })}
               {Object.entries(CITY_POS).map(([city, pos]) => {
                 const isSource = cascadeData && city === cascadeData.city;
                 const isAffected = affectedNodes.has(city) && !isSource;
@@ -747,7 +707,6 @@ function ImpactCascade() {
             {[[T.red,"Source"],[T.amber,"Affected"],[T.cyan,"Normal"]].map(([c,l]) => <span key={l} style={{ display:"flex", alignItems:"center", gap:5 }}><StatusDot color={c}/>{l}</span>)}
           </div>
         </Panel>
-
         <div>
           {!cascadeData && !loading && !err && (
             <Panel style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:360, textAlign:"center" }}>
@@ -802,13 +761,13 @@ const INV_ITEMS = [
 ];
 
 function StockoutShield() {
-  const [selected, setSelected]       = useState(null);
-  const [reorderRes, setReorderRes]   = useState(null);
-  const [routeRes, setRouteRes]       = useState(null);
-  const [forecastD, setForecastD]     = useState(null);
-  const [loading, setLoading]         = useState(false);
+  const [selected, setSelected]         = useState(null);
+  const [reorderRes, setReorderRes]     = useState(null);
+  const [routeRes, setRouteRes]         = useState(null);
+  const [forecastD, setForecastD]       = useState(null);
+  const [loading, setLoading]           = useState(false);
   const [routeLoading, setRouteLoading] = useState(false);
-  const [err, setErr]                 = useState("");
+  const [err, setErr]                   = useState("");
 
   const runAnalysis = async (item) => {
     setSelected(item); setErr(""); setLoading(true); setReorderRes(null); setRouteRes(null); setForecastD(null);
@@ -842,7 +801,6 @@ function StockoutShield() {
         <h2 style={{ fontFamily:F.display, fontSize:26, fontWeight:700, color:T.text }}>Stockout Shield</h2>
         <p style={{ fontFamily:F.body, color:T.textMuted, fontSize:13, marginTop:4 }}>Days-to-stockout per SKU · ML reorder triggers · Emergency route planning</p>
       </div>
-
       <div style={{ display:"grid", gridTemplateColumns: selected ? "1fr 400px" : "1fr", gap:18 }}>
         <Panel style={{ padding:0, overflow:"hidden" }}>
           <table style={{ width:"100%", borderCollapse:"collapse" }}>
@@ -864,20 +822,14 @@ function StockoutShield() {
                     onMouseOver={e => { if(!isSel) e.currentTarget.style.background=T.bgCardHi; }}
                     onMouseOut={e => { if(!isSel) e.currentTarget.style.background=daysLeft<3?`${T.red}05`:"transparent"; }}>
                     <td style={{ padding:"12px 16px", fontFamily:F.mono, fontSize:10, fontWeight:600, color:T.cyan }}>{item.sku}</td>
-                    <td style={{ padding:"12px 16px", fontFamily:F.display, fontSize:12.5, fontWeight:600, color:T.text }}>
-                      {item.name}
-                      {daysLeft<3 && <span style={{ marginLeft:8, fontFamily:F.mono, fontSize:8, color:T.red, letterSpacing:1, animation:"pulse 1s infinite" }}>● CRITICAL</span>}
-                    </td>
+                    <td style={{ padding:"12px 16px", fontFamily:F.display, fontSize:12.5, fontWeight:600, color:T.text }}>{item.name}{daysLeft<3 && <span style={{ marginLeft:8, fontFamily:F.mono, fontSize:8, color:T.red, letterSpacing:1, animation:"pulse 1s infinite" }}>● CRITICAL</span>}</td>
                     <td style={{ padding:"12px 16px", fontFamily:F.body, fontSize:12, color:T.textMuted }}>{item.warehouse}</td>
                     <td style={{ padding:"12px 16px" }}>
                       <div style={{ fontFamily:F.display, fontSize:13, fontWeight:600, color:isCrit?T.red:T.text }}>{item.qty.toLocaleString("en-IN")}<span style={{ fontSize:10, color:T.textMuted }}> / {item.max.toLocaleString("en-IN")}</span></div>
                       <div style={{ marginTop:4, width:80, background:T.bgPanel, borderRadius:20, height:3 }}><div style={{ width:`${Math.min(100,Math.round(item.qty/item.max*100))}%`, height:"100%", background:rc, borderRadius:20 }}/></div>
                     </td>
                     <td style={{ padding:"12px 16px", fontFamily:F.mono, fontSize:11, color:T.textMuted }}>{item.daily} u/d</td>
-                    <td style={{ padding:"12px 16px" }}>
-                      <div style={{ fontFamily:F.display, fontSize:15, fontWeight:700, color:rc }}>{daysLeft}d</div>
-                      <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginTop:1 }}>{item.qty}÷{item.daily}</div>
-                    </td>
+                    <td style={{ padding:"12px 16px" }}><div style={{ fontFamily:F.display, fontSize:15, fontWeight:700, color:rc }}>{daysLeft}d</div><div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginTop:1 }}>{item.qty}÷{item.daily}</div></td>
                     <td style={{ padding:"12px 16px" }}><Badge color={rc}>{isCrit?"Critical":isWarn?"Warning":"Normal"}</Badge></td>
                   </tr>
                 );
@@ -885,41 +837,24 @@ function StockoutShield() {
             </tbody>
           </table>
         </Panel>
-
         {selected && (
           <div style={{ display:"flex", flexDirection:"column", gap:14, animation:"fadeUp .2s ease" }}>
             <Panel>
               <div style={{ display:"flex", justifyContent:"space-between", marginBottom:14 }}>
-                <div>
-                  <div style={{ fontFamily:F.display, fontSize:14, fontWeight:700, color:T.text }}>{selected.name}</div>
-                  <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginTop:2, letterSpacing:.5 }}>{selected.sku} · {selected.warehouse} · {selected.productId}</div>
-                </div>
+                <div><div style={{ fontFamily:F.display, fontSize:14, fontWeight:700, color:T.text }}>{selected.name}</div><div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginTop:2, letterSpacing:.5 }}>{selected.sku} · {selected.warehouse} · {selected.productId}</div></div>
                 <button onClick={() => setSelected(null)} style={{ background:"none", border:"none", fontSize:16, cursor:"pointer", color:T.textMuted }}>✕</button>
               </div>
               {loading && <Spinner label="RUNNING ML ANALYSIS…"/>}
               {err && <ErrBox msg={err}/>}
               {reorderRes && (
                 <div style={{ background:`${(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green}0D`, border:`1px solid ${(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green}30`, borderRadius:10, padding:"14px 16px" }}>
-                  <div style={{ fontFamily:F.mono, fontSize:9, fontWeight:700, color:(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green, marginBottom:8, letterSpacing:1.5 }}>
-                    {(reorderRes.reorder_now||reorderRes.reorder_needed)?"⚠ EMERGENCY REORDER NEEDED":"✓ STOCK ADEQUATE"}
-                  </div>
-                  {reorderRes.days_until_stockout!=null && (
-                    <div style={{ marginBottom:8 }}>
-                      <div style={{ fontFamily:F.display, fontSize:20, fontWeight:700, color:(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green }}>{reorderRes.days_until_stockout.toFixed(1)} days to stockout</div>
-                      <div style={{ fontFamily:F.body, fontSize:11, color:T.textMuted, marginTop:2 }}>ML estimate incl. lead time (5d) + supplier delay (2d) buffer</div>
-                    </div>
-                  )}
+                  <div style={{ fontFamily:F.mono, fontSize:9, fontWeight:700, color:(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green, marginBottom:8, letterSpacing:1.5 }}>{(reorderRes.reorder_now||reorderRes.reorder_needed)?"⚠ EMERGENCY REORDER NEEDED":"✓ STOCK ADEQUATE"}</div>
+                  {reorderRes.days_until_stockout!=null && (<div style={{ marginBottom:8 }}><div style={{ fontFamily:F.display, fontSize:20, fontWeight:700, color:(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green }}>{reorderRes.days_until_stockout.toFixed(1)} days to stockout</div><div style={{ fontFamily:F.body, fontSize:11, color:T.textMuted, marginTop:2 }}>ML estimate incl. lead time (5d) + supplier delay (2d) buffer</div></div>)}
                   {reorderRes.recommended_order_qty!=null && <div style={{ fontFamily:F.body, fontSize:13, color:T.text, marginBottom:6 }}>Recommended order: <b>{reorderRes.recommended_order_qty.toLocaleString("en-IN")} units</b></div>}
-                  {reorderRes.days_until_stockout!=null && (
-                    <div style={{ marginTop:8, padding:"8px 10px", background:`${(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green}15`, borderRadius:8 }}>
-                      <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginBottom:2, letterSpacing:1 }}>REVENUE AT RISK (30-DAY)</div>
-                      <div style={{ fontFamily:F.display, fontSize:16, fontWeight:700, color:(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green }}>₹{calcRevenueAtRisk(reorderRes.days_until_stockout, selected.daily, selected.productId).toLocaleString("en-IN")}</div>
-                    </div>
-                  )}
+                  {reorderRes.days_until_stockout!=null && (<div style={{ marginTop:8, padding:"8px 10px", background:`${(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green}15`, borderRadius:8 }}><div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginBottom:2, letterSpacing:1 }}>REVENUE AT RISK (30-DAY)</div><div style={{ fontFamily:F.display, fontSize:16, fontWeight:700, color:(reorderRes.reorder_now||reorderRes.reorder_needed)?T.red:T.green }}>₹{calcRevenueAtRisk(reorderRes.days_until_stockout, selected.daily, selected.productId).toLocaleString("en-IN")}</div></div>)}
                 </div>
               )}
             </Panel>
-
             {reorderRes && (
               <Panel>
                 <SectionLabel>EMERGENCY DISPATCH ROUTE</SectionLabel>
@@ -940,7 +875,6 @@ function StockoutShield() {
                 ) : !routeLoading && <Btn onClick={() => runRoute(selected)} variant="ghost" style={{ width:"100%", justifyContent:"center" }}>🗺 PLAN EMERGENCY ROUTE</Btn>}
               </Panel>
             )}
-
             {forecastD && forecastD.length > 0 && (
               <Panel>
                 <SectionLabel>14-DAY DEMAND FORECAST</SectionLabel>
@@ -989,9 +923,9 @@ function RevenueGuard() {
     setResults(out); setLoading(false); setComputed(true);
   };
 
-  const totalRisk = results.reduce((s,r) => s + r.revRisk, 0);
+  const totalRisk    = results.reduce((s,r) => s + r.revRisk, 0);
   const totalSavable = results.filter(r => r.savings > 0).reduce((s,r) => s + r.savings, 0);
-  const PIE_COLORS = [T.red, T.amber, T.cyanDim, T.purple];
+  const PIE_COLORS   = [T.red, T.amber, T.cyanDim, T.purple];
   const pieData = useMemo(() => {
     if (!results.length) return [];
     const byProduct = {};
@@ -1010,7 +944,6 @@ function RevenueGuard() {
         <Btn onClick={runAnalysis} disabled={loading}>{loading?"CALCULATING…":"₹ CALCULATE REVENUE RISK"}</Btn>
       </div>
       {loading && <Spinner label="CALCULATING REVENUE EXPOSURE…"/>}
-
       {computed && results.length > 0 && (
         <>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, marginBottom:22 }}>
@@ -1018,7 +951,6 @@ function RevenueGuard() {
             <MetricCard label="Items Requiring Action" value={String(results.filter(r=>r.needsReorder).length)} sub="Reorder triggered by ML model" icon="⚠" accent={T.amber}/>
             <MetricCard label="Recoverable if Acted Now" value={`₹${(totalSavable/100000).toFixed(1)}L`} sub="Where dispatch cost < revenue at risk" icon="📈" accent={T.green}/>
           </div>
-
           {pieData.length > 0 && (
             <Panel style={{ marginBottom:18 }}>
               <div style={{ display:"flex", alignItems:"center", gap:32 }}>
@@ -1039,7 +971,6 @@ function RevenueGuard() {
               </div>
             </Panel>
           )}
-
           <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
             {results.map((item, i) => {
               const verdict = item.savings>0?"ACT NOW":item.revRisk>0?"MONITOR":"NO RISK";
@@ -1073,7 +1004,6 @@ function RevenueGuard() {
               );
             })}
           </div>
-
           <div style={{ position:"sticky", bottom:0, marginTop:14, padding:"14px 20px", background:T.bgPanel, border:`1px solid ${T.borderAcc}`, borderRadius:12, display:"flex", justifyContent:"space-between", alignItems:"center", boxShadow:`0 0 20px ${T.cyanGlow}` }}>
             <div style={{ fontFamily:F.mono, fontSize:10, color:T.textDim, letterSpacing:1.5 }}>TOTAL — {results.length} SKUS ANALYSED</div>
             <div style={{ display:"flex", gap:28 }}>
@@ -1084,7 +1014,6 @@ function RevenueGuard() {
           </div>
         </>
       )}
-
       {!computed && !loading && (
         <Panel style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:280 }}>
           <div style={{ textAlign:"center" }}><div style={{ fontSize:44, marginBottom:12 }}>₹</div><div style={{ fontFamily:F.display, fontSize:18, fontWeight:700, color:T.text, marginBottom:8 }}>Calculate your revenue exposure</div><div style={{ fontFamily:F.body, fontSize:13, color:T.textMuted }}>Live ML stockout estimates × product unit prices × logistics dispatch cost</div></div>
@@ -1094,7 +1023,7 @@ function RevenueGuard() {
   );
 }
 
-/* ─── RESILIENCE AGENT ───────────────────────────────────────────────────────── */
+/* ─── RESILIENCE AGENT (original) ────────────────────────────────────────────── */
 const AGENT_SUGGESTIONS = ["Should I dispatch from Mumbai today?", "Which warehouse needs urgent reorder?", "Is the Chennai-Bangalore corridor safe?", "Compare risk across all corridors"];
 
 function parseIntent(q) {
@@ -1112,17 +1041,17 @@ function parseIntent(q) {
 }
 
 function ResilienceAgent() {
-  const [query, setQuery]     = useState("");
-  const [running, setRunning] = useState(false);
-  const [steps, setSteps]     = useState([]);
-  const [verdict, setVerdict] = useState(null);
-  const [probing, setProbing] = useState(false);
+  const [query, setQuery]       = useState("");
+  const [running, setRunning]   = useState(false);
+  const [steps, setSteps]       = useState([]);
+  const [verdict, setVerdict]   = useState(null);
+  const [probing, setProbing]   = useState(false);
   const [probeRes, setProbeRes] = useState(null);
-  const bottomRef = useRef(null);
+  const bottomRef               = useRef(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior:"smooth" }); }, [steps, verdict]);
 
-  const addStep = (icon, text, status = "done") => setSteps(prev => [...prev, { icon, text, status, id: Date.now() + Math.random() }]);
+  const addStep    = (icon, text, status = "done") => setSteps(prev => [...prev, { icon, text, status, id: Date.now() + Math.random() }]);
   const updateStep = (match, patch) => setSteps(prev => prev.map(s => s.text.includes(match) ? { ...s, ...patch } : s));
 
   const runAgent = async (q) => {
@@ -1179,33 +1108,33 @@ function ResilienceAgent() {
     addStep("🧠", "Synthesising signals → generating verdict…", "running");
     await new Promise(r => setTimeout(r, 500));
     const delayProb = delayRes?.delay_probability || 0;
-    const daysLeft = reorderRes?.days_until_stockout || 30;
-    const hasAnomaly = anomalyRes?.is_anomaly || false;
-    const score = calcDisruptionScore(delayProb, anomalyRes?.anomaly_score, daysLeft, hasAnomaly);
-    const risk = score > 70 ? "HIGH" : score > 45 ? "MEDIUM" : "LOW";
-    const revRisk = calcRevenueAtRisk(daysLeft, sku.daily, sku.productId);
+    const daysLeft  = reorderRes?.days_until_stockout || 30;
+    const hasAnomaly= anomalyRes?.is_anomaly || false;
+    const score     = calcDisruptionScore(delayProb, anomalyRes?.anomaly_score, daysLeft, hasAnomaly);
+    const risk      = score > 70 ? "HIGH" : score > 45 ? "MEDIUM" : "LOW";
+    const revRisk   = calcRevenueAtRisk(daysLeft, sku.daily, sku.productId);
     const dispatchCost = costRes?.predicted_cost_inr || 0;
-    const actions = [];
+    const actions   = [];
     if (intent.isDispatchQ) {
-      if (delayProb > 60) actions.push(`⚠ Delay risk on ${city}→${destCity} is HIGH at ${delayProb.toFixed(0)}%. Recommend departing before 6 AM or rerouting. Do not dispatch without contingency plan.`);
-      else if (delayProb > 30) actions.push(`Moderate delay risk (${delayProb.toFixed(0)}%) on ${city}→${destCity}. Dispatch feasible — build 2-hour buffer into delivery commitments.`);
+      if (delayProb > 60) actions.push(`⚠ Delay risk on ${city}→${destCity} is HIGH at ${delayProb.toFixed(0)}%. Recommend departing before 6 AM or rerouting.`);
+      else if (delayProb > 30) actions.push(`Moderate delay risk (${delayProb.toFixed(0)}%) on ${city}→${destCity}. Dispatch feasible — build 2-hour buffer.`);
       else actions.push(`✓ ${city}→${destCity} corridor is clear — delay probability only ${delayProb.toFixed(0)}%. Green light to proceed.`);
-      if (dispatchCost > 0) actions.push(`Dispatch cost (₹${(dispatchCost/1000).toFixed(0)}K) vs revenue at risk (₹${(revRisk/1000).toFixed(0)}K): ${dispatchCost < revRisk ? "economically justified — act now." : "cost exceeds current risk — monitor situation."}`);
+      if (dispatchCost > 0) actions.push(`Dispatch cost (₹${(dispatchCost/1000).toFixed(0)}K) vs revenue at risk (₹${(revRisk/1000).toFixed(0)}K): ${dispatchCost < revRisk ? "economically justified." : "cost exceeds current risk."}`);
     }
     if (intent.isStockoutQ || (reorderRes?.reorder_now || reorderRes?.reorder_needed)) {
       if (daysLeft < 7) actions.push(`🚨 CRITICAL: ${city} has only ${daysLeft.toFixed(1)} days of ${sku.productId} remaining. Trigger emergency reorder immediately.`);
       else if (daysLeft < 14) actions.push(`⚠ ${city} approaching reorder threshold — ${daysLeft.toFixed(1)} days of stock. Place reorder within 48 hours.`);
-      else actions.push(`Stock at ${city} is healthy — ${daysLeft.toFixed(1)} days of ${sku.productId} remaining. Next review in 7 days.`);
+      else actions.push(`Stock at ${city} is healthy — ${daysLeft.toFixed(1)} days remaining.`);
     }
-    if (intent.isRiskQ) actions.push(`Disruption score for ${city}: ${score}/100 (${risk}). ${score>70?"Immediate mitigation recommended.":score>45?"Monitor closely and prepare contingency suppliers.":"Within acceptable tolerance."}`);
+    if (intent.isRiskQ) actions.push(`Disruption score for ${city}: ${score}/100 (${risk}). ${score>70?"Immediate mitigation recommended.":score>45?"Monitor closely.":"Within acceptable tolerance."}`);
     if (hasAnomaly) actions.push(`🔍 Inventory anomaly at ${city}. Investigate for data errors, unexpected consumption, or unreported damage.`);
     if (intent.isCompareQ && corridorComparison?.length > 0) {
-      const safest = corridorComparison[corridorComparison.length-1];
-      const riskiest = corridorComparison[0];
-      actions.push(`Safest corridor: ${safest.route} — score ${safest.score}/100, ${safest.delayProb.toFixed(0)}% delay risk. Prioritise this route.`);
-      actions.push(`Highest risk: ${riskiest.route} (score ${riskiest.score}/100). Pre-position safety stock at ${riskiest.route.split("→")[0]}.`);
+      const safest  = corridorComparison[corridorComparison.length-1];
+      const riskiest= corridorComparison[0];
+      actions.push(`Safest corridor: ${safest.route} — score ${safest.score}/100. Prioritise this route.`);
+      actions.push(`Highest risk: ${riskiest.route} (score ${riskiest.score}/100). Pre-position safety stock.`);
     }
-    if (actions.length === 0) actions.push(`No immediate action required for ${city}. Resilience score ${score}/100 (${risk}), delay ${delayProb.toFixed(0)}%, ${daysLeft.toFixed(1)}d of stock. Continue standard monitoring.`);
+    if (actions.length === 0) actions.push(`No immediate action required for ${city}. Resilience score ${score}/100 (${risk}), delay ${delayProb.toFixed(0)}%, ${daysLeft.toFixed(1)}d of stock.`);
     updateStep("Synthesising", { status:"done" });
     setVerdict({ question, city, score, risk, delayProb, daysLeft, revRisk, actions, corridorComparison, intent, dispatchCost });
     setRunning(false);
@@ -1230,7 +1159,6 @@ function ResilienceAgent() {
 
   return (
     <div style={{ flex:1, overflow:"hidden", display:"flex", flexDirection:"column", background:T.bg }}>
-      {/* Header */}
       <div style={{ padding:"22px 32px 16px", borderBottom:`1px solid ${T.border}` }}>
         <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
           <div>
@@ -1246,8 +1174,6 @@ function ResilienceAgent() {
           ))}
         </div>
       </div>
-
-      {/* Body */}
       <div style={{ flex:1, overflow:"auto", padding:"20px 32px" }}>
         {probing && <Spinner label="SCANNING ALL CORRIDORS…"/>}
         {probeRes && (
@@ -1256,22 +1182,13 @@ function ResilienceAgent() {
             <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:10 }}>
               {probeRes.map((a, i) => (
                 <div key={i} style={{ background:`${RISK_COLOR(a.score)}08`, border:`1px solid ${RISK_COLOR(a.score)}20`, borderRadius:10, padding:"12px 14px", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-                  <div>
-                    <div style={{ fontFamily:F.display, fontSize:13, fontWeight:600, color:T.text }}>{a.route}</div>
-                    <div style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted, marginTop:2, letterSpacing:.3 }}>
-                      Delay: {a.delayProb.toFixed(0)}% · {a.days.toFixed(1)}d to stockout{a.reorderNeeded&&<span style={{ color:T.red }}> · ⚠ Reorder</span>}
-                    </div>
-                  </div>
-                  <div style={{ textAlign:"right" }}>
-                    <div style={{ fontFamily:F.display, fontSize:18, fontWeight:700, color:RISK_COLOR(a.score) }}>{a.score}</div>
-                    <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim }}>/100</div>
-                  </div>
+                  <div><div style={{ fontFamily:F.display, fontSize:13, fontWeight:600, color:T.text }}>{a.route}</div><div style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted, marginTop:2, letterSpacing:.3 }}>Delay: {a.delayProb.toFixed(0)}% · {a.days.toFixed(1)}d to stockout{a.reorderNeeded&&<span style={{ color:T.red }}> · ⚠ Reorder</span>}</div></div>
+                  <div style={{ textAlign:"right" }}><div style={{ fontFamily:F.display, fontSize:18, fontWeight:700, color:RISK_COLOR(a.score) }}>{a.score}</div><div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim }}>/100</div></div>
                 </div>
               ))}
             </div>
           </div>
         )}
-
         {steps.length > 0 && (
           <div style={{ marginBottom:20 }}>
             <SectionLabel>AGENT REASONING STEPS</SectionLabel>
@@ -1288,7 +1205,6 @@ function ResilienceAgent() {
             ))}
           </div>
         )}
-
         {verdict && (
           <div style={{ animation:"fadeUp .4s ease" }}>
             <SectionLabel>AGENT VERDICT</SectionLabel>
@@ -1300,16 +1216,11 @@ function ResilienceAgent() {
                   <div style={{ fontFamily:F.mono, fontSize:9, color:verdict.risk==="HIGH"?T.red:verdict.risk==="MEDIUM"?T.amber:T.green, letterSpacing:1 }}>{verdict.risk} RISK</div>
                 </div>
               </div>
-
               <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, marginBottom:16 }}>
                 {[["DELAY PROB",`${verdict.delayProb.toFixed(1)}%`,verdict.delayProb>50?T.red:verdict.delayProb>25?T.amber:T.green],["DAYS TO STOCKOUT",`${verdict.daysLeft.toFixed(1)}d`,verdict.daysLeft<7?T.red:verdict.daysLeft<14?T.amber:T.green],["REVENUE AT RISK",`₹${(verdict.revRisk/1000).toFixed(0)}K`,verdict.revRisk>50000?T.red:T.amber],["DISPATCH COST",`₹${(verdict.dispatchCost/1000).toFixed(0)}K`,T.cyan]].map(([l,v,c]) => (
-                  <div key={l} style={{ background:T.bgPanel, borderRadius:9, padding:"10px 12px", border:`1px solid ${T.border}` }}>
-                    <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, marginBottom:4, letterSpacing:1 }}>{l}</div>
-                    <div style={{ fontFamily:F.display, fontSize:16, fontWeight:700, color:c }}>{v}</div>
-                  </div>
+                  <div key={l} style={{ background:T.bgPanel, borderRadius:9, padding:"10px 12px", border:`1px solid ${T.border}` }}><div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, marginBottom:4, letterSpacing:1 }}>{l}</div><div style={{ fontFamily:F.display, fontSize:16, fontWeight:700, color:c }}>{v}</div></div>
                 ))}
               </div>
-
               {verdict.corridorComparison && (
                 <div style={{ marginBottom:16 }}>
                   <SectionLabel>CORRIDOR COMPARISON</SectionLabel>
@@ -1323,7 +1234,6 @@ function ResilienceAgent() {
                   ))}
                 </div>
               )}
-
               <SectionLabel>RECOMMENDED ACTIONS</SectionLabel>
               {verdict.actions.map((a, i) => (
                 <div key={i} style={{ display:"flex", gap:10, padding:"9px 12px", background:T.bgPanel, borderRadius:8, marginBottom:6, border:`1px solid ${T.border}` }}>
@@ -1334,7 +1244,6 @@ function ResilienceAgent() {
             </Panel>
           </div>
         )}
-
         {steps.length === 0 && !probeRes && (
           <Panel style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:200 }}>
             <div style={{ textAlign:"center" }}>
@@ -1346,10 +1255,8 @@ function ResilienceAgent() {
         )}
         <div ref={bottomRef}/>
       </div>
-
-      {/* Input */}
       <div style={{ padding:"14px 32px", borderTop:`1px solid ${T.border}`, background:T.bgPanel, display:"flex", gap:12 }}>
-        <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key==="Enter" && !running && runAgent()} placeholder="e.g. Is it safe to dispatch from Chennai today? Which warehouse is closest to stockout? Compare all corridors…" style={{ flex:1, padding:"11px 16px", border:`1px solid ${T.border}`, borderRadius:10, fontFamily:F.mono, fontSize:12, color:T.text, background:T.bgInput, outline:"none", letterSpacing:.3 }} onFocus={e => e.target.style.borderColor=T.cyan} onBlur={e => e.target.style.borderColor=T.border}/>
+        <input value={query} onChange={e => setQuery(e.target.value)} onKeyDown={e => e.key==="Enter" && !running && runAgent()} placeholder="e.g. Is it safe to dispatch from Chennai today? Which warehouse is closest to stockout?" style={{ flex:1, padding:"11px 16px", border:`1px solid ${T.border}`, borderRadius:10, fontFamily:F.mono, fontSize:12, color:T.text, background:T.bgInput, outline:"none", letterSpacing:.3 }} onFocus={e => e.target.style.borderColor=T.cyan} onBlur={e => e.target.style.borderColor=T.border}/>
         <Btn onClick={() => runAgent()} disabled={running || !query.trim()}>
           {running ? <><div style={{ width:12,height:12,borderRadius:"50%",border:`2px solid ${T.cyan}`,borderTopColor:"transparent",animation:"spin 0.7s linear infinite" }}/> THINKING…</> : "⚡ ASK AGENT →"}
         </Btn>
@@ -1358,26 +1265,945 @@ function ResilienceAgent() {
   );
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════════
+   NEW FEATURE 1 — AUTONOMOUS REORDER AGENT
+   Polls all 6 SKUs, detects reorder triggers, calls Claude to draft POs,
+   shows Pending Approvals tray — one-click confirm / dismiss
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+const REORDER_SKU_LIST = [
+  { id:"INV-001", sku:"STL-ROD-12", name:"Steel Rods 12mm",       warehouse:"Chennai",   qty:340,  daily:12, productId:"PROD_001", leadTime:5, supplierDelay:2 },
+  { id:"INV-002", sku:"ELC-CAP-22", name:"Electronic Capacitors",  warehouse:"Mumbai",    qty:18,   daily:8,  productId:"PROD_002", leadTime:7, supplierDelay:3 },
+  { id:"INV-003", sku:"TXT-COT-XL", name:"Cotton Fabric XL",       warehouse:"Ahmedabad", qty:620,  daily:25, productId:"PROD_003", leadTime:4, supplierDelay:1 },
+  { id:"INV-004", sku:"AUT-BRK-44", name:"Brake Pads Set",         warehouse:"Pune",      qty:9,    daily:4,  productId:"PROD_002", leadTime:7, supplierDelay:3 },
+  { id:"INV-005", sku:"FDG-RIC-25", name:"Rice (25kg Bags)",       warehouse:"Kolkata",   qty:1200, daily:80, productId:"PROD_003", leadTime:4, supplierDelay:1 },
+  { id:"INV-006", sku:"CHM-H2SO4",  name:"Sulphuric Acid 98%",     warehouse:"Hyderabad", qty:82,   daily:5,  productId:"PROD_001", leadTime:5, supplierDelay:2 },
+];
+
+function ReorderAgent() {
+  const [scanning, setScanning]       = useState(false);
+  const [scanned, setScanned]         = useState(false);
+  const [scanResults, setScanResults] = useState([]);
+  const [drafting, setDrafting]       = useState({});   // id → true/false
+  const [pendingPOs, setPendingPOs]   = useState([]);   // Claude-drafted POs
+  const [confirmed, setConfirmed]     = useState([]);   // confirmed PO ids
+  const [dismissed, setDismissed]     = useState(new Set());
+  const [lastScan, setLastScan]       = useState(null);
+
+  // Load from storage on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("sc_pending_pos");
+        if (r) setPendingPOs(JSON.parse(r.value));
+      } catch {}
+      try {
+        const r = await window.storage.get("sc_dismissed_pos");
+        if (r) setDismissed(new Set(JSON.parse(r.value)));
+      } catch {}
+      try {
+        const r = await window.storage.get("sc_last_reorder_scan");
+        if (r) setLastScan(r.value);
+      } catch {}
+    })();
+  }, []);
+
+  const savePOs = async (pos) => {
+    try { await window.storage.set("sc_pending_pos", JSON.stringify(pos)); } catch {}
+  };
+
+  const runScan = async () => {
+    setScanning(true); setScanResults([]);
+    const results = [];
+    await Promise.allSettled(REORDER_SKU_LIST.map(async sku => {
+      try {
+        const r = await callAPI("/reorder", {
+          product_id: sku.productId, warehouse: sku.warehouse,
+          current_stock: sku.qty, daily_sales: sku.daily,
+          lead_time_days: sku.leadTime, supplier_delay_days: sku.supplierDelay,
+          is_promotion: 0,
+        });
+        const revRisk = calcRevenueAtRisk(r.days_until_stockout, sku.daily, sku.productId);
+        const severity = (r.days_until_stockout ?? 30) < 5 ? "critical" : (r.days_until_stockout ?? 30) < 14 ? "warning" : "normal";
+        results.push({ ...sku, reorder: r, revRisk, severity, daysLeft: r.days_until_stockout ?? 30 });
+      } catch(e) { results.push({ ...sku, error: e.message, severity: "normal" }); }
+    }));
+    results.sort((a,b) => a.daysLeft - b.daysLeft);
+    setScanResults(results); setScanning(false); setScanned(true);
+    const ts = new Date().toLocaleTimeString("en-IN", { hour:"2-digit", minute:"2-digit" });
+    setLastScan(ts);
+    try { await window.storage.set("sc_last_reorder_scan", ts); } catch {}
+  };
+
+  const draftPO = async (sku) => {
+    setDrafting(p => ({ ...p, [sku.id]: true }));
+    try {
+      const forecastData = await callAPI("/forecast/summary", {
+        product_id: sku.productId, warehouse: sku.warehouse,
+        forecast_days: 30, is_promotion: 0,
+      }).catch(() => null);
+
+      const supplier = SUPPLIERS[sku.productId] || { name: "Unknown Supplier", contact: "N/A", leadTime: sku.leadTime, reliability: 85 };
+      const prompt = `You are a supply chain procurement analyst. Generate a structured Purchase Order draft as a JSON object.
+
+SKU Data:
+- Item: ${sku.name} (${sku.sku})
+- Warehouse: ${sku.warehouse}
+- Current stock: ${sku.qty} units
+- Daily consumption: ${sku.daily} units/day
+- Days until stockout: ${sku.daysLeft.toFixed(1)}
+- ML recommended order qty: ${sku.reorder?.recommended_order_qty || "N/A"}
+- Urgency: ${sku.reorder?.urgency || "High"}
+- Revenue at risk: ₹${sku.revRisk.toLocaleString("en-IN")}
+- Unit price: ₹${(UNIT_PRICES[sku.productId]||4500).toLocaleString("en-IN")}
+- 30-day avg forecast demand: ${forecastData?.average_daily_demand || sku.daily} units/day
+
+Supplier:
+- Name: ${supplier.name}
+- Contact: ${supplier.contact}
+- Lead time: ${supplier.leadTime} days
+- Historical reliability: ${supplier.reliability}%
+
+Return ONLY a JSON object (no markdown) with these exact keys:
+{
+  "supplier": "supplier name",
+  "contactPerson": "name",
+  "recommendedQty": number,
+  "justification": "2-sentence business justification",
+  "urgencyLevel": "Critical|High|Medium",
+  "expectedDelivery": "date string like Apr 14, 2026",
+  "estimatedCost": number,
+  "riskIfDelayed": "1-sentence consequence",
+  "approvalNote": "1-sentence note for the approver"
+}`;
+
+      const result = await callClaude(
+        "You are a supply chain procurement AI. Return only valid JSON, no markdown, no explanation.",
+        prompt,
+        600
+      );
+
+      const po = {
+        id: `PO-${Date.now()}`,
+        skuId: sku.id,
+        skuName: sku.name,
+        sku: sku.sku,
+        warehouse: sku.warehouse,
+        productId: sku.productId,
+        daysLeft: sku.daysLeft,
+        revRisk: sku.revRisk,
+        severity: sku.severity,
+        createdAt: new Date().toLocaleString("en-IN"),
+        ...result,
+      };
+
+      setPendingPOs(prev => {
+        const updated = [po, ...prev.filter(p => p.skuId !== sku.id)];
+        savePOs(updated);
+        return updated;
+      });
+    } catch(e) {
+      console.error("PO draft failed:", e);
+    }
+    setDrafting(p => ({ ...p, [sku.id]: false }));
+  };
+
+  const confirmPO = async (po) => {
+    setConfirmed(prev => [...prev, po.id]);
+    setPendingPOs(prev => {
+      const updated = prev.filter(p => p.id !== po.id);
+      savePOs(updated);
+      return updated;
+    });
+  };
+
+  const dismissPO = async (po) => {
+    setDismissed(prev => {
+      const next = new Set(prev);
+      next.add(po.id);
+      window.storage.set("sc_dismissed_pos", JSON.stringify([...next])).catch(() => {});
+      return next;
+    });
+    setPendingPOs(prev => {
+      const updated = prev.filter(p => p.id !== po.id);
+      savePOs(updated);
+      return updated;
+    });
+  };
+
+  const visiblePOs = pendingPOs.filter(p => !dismissed.has(p.id));
+  const triggerItems = scanResults.filter(s => s.severity !== "normal" && !s.error);
+
+  return (
+    <div style={{ flex:1, overflow:"auto", padding:"28px 32px", background:T.bg }}>
+      {/* Header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:28 }}>
+        <div>
+          <SectionLabel>Agent · Autonomous Reorder</SectionLabel>
+          <h2 style={{ fontFamily:F.display, fontSize:26, fontWeight:700, color:T.text }}>Reorder Agent</h2>
+          <p style={{ fontFamily:F.body, color:T.textMuted, fontSize:13, marginTop:4 }}>
+            Agent scans all SKUs → detects triggers → Claude drafts POs → you approve or dismiss
+          </p>
+        </div>
+        <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+          {lastScan && <span style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted }}>Last scan: {lastScan}</span>}
+          <Btn onClick={runScan} disabled={scanning}>{scanning ? "SCANNING…" : "⟳ SCAN ALL SKUS"}</Btn>
+        </div>
+      </div>
+
+      {/* Pending Approvals Tray */}
+      {visiblePOs.length > 0 && (
+        <div style={{ marginBottom:24 }}>
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:14 }}>
+            <SectionLabel>PENDING APPROVALS — {visiblePOs.length} PO{visiblePOs.length>1?"s":""} AWAITING DECISION</SectionLabel>
+          </div>
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {visiblePOs.map(po => {
+              const urgColor = po.urgencyLevel === "Critical" ? T.red : po.urgencyLevel === "High" ? T.amber : T.cyan;
+              return (
+                <div key={po.id} style={{ background:T.bgCard, border:`1px solid ${urgColor}30`, borderLeft:`3px solid ${urgColor}`, borderRadius:12, padding:"18px 20px", animation:"fadeUp .3s ease" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
+                        <Badge color={urgColor}>{po.urgencyLevel}</Badge>
+                        <span style={{ fontFamily:F.mono, fontSize:10, color:T.textDim }}>{po.id}</span>
+                      </div>
+                      <div style={{ fontFamily:F.display, fontSize:16, fontWeight:700, color:T.text }}>{po.skuName}</div>
+                      <div style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted, marginTop:2 }}>{po.sku} · {po.warehouse} · {po.daysLeft?.toFixed(1)}d to stockout</div>
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginBottom:2 }}>REVENUE AT RISK</div>
+                      <div style={{ fontFamily:F.display, fontSize:20, fontWeight:700, color:T.red }}>₹{(po.revRisk/1000).toFixed(0)}K</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12, marginBottom:14 }}>
+                    {[
+                      ["SUPPLIER", po.supplier || "—"],
+                      ["CONTACT", po.contactPerson || "—"],
+                      ["ORDER QTY", po.recommendedQty ? `${po.recommendedQty.toLocaleString("en-IN")} units` : "—"],
+                      ["EST. COST", po.estimatedCost ? `₹${(po.estimatedCost/1000).toFixed(0)}K` : "—"],
+                    ].map(([l,v]) => (
+                      <div key={l} style={{ background:T.bgPanel, borderRadius:8, padding:"10px 12px" }}>
+                        <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, marginBottom:3, letterSpacing:1 }}>{l}</div>
+                        <div style={{ fontFamily:F.display, fontSize:13, fontWeight:600, color:T.text }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {po.justification && (
+                    <div style={{ background:`${urgColor}08`, border:`1px solid ${urgColor}20`, borderRadius:8, padding:"10px 14px", marginBottom:12 }}>
+                      <div style={{ fontFamily:F.mono, fontSize:8, color:urgColor, marginBottom:4, letterSpacing:1.5 }}>CLAUDE'S JUSTIFICATION</div>
+                      <div style={{ fontFamily:F.body, fontSize:12.5, color:T.text, lineHeight:1.6 }}>{po.justification}</div>
+                    </div>
+                  )}
+
+                  {po.approvalNote && (
+                    <div style={{ fontFamily:F.body, fontSize:12, color:T.textMuted, marginBottom:14, padding:"8px 12px", background:T.bgPanel, borderRadius:6 }}>
+                      📋 <em>{po.approvalNote}</em>
+                    </div>
+                  )}
+
+                  <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+                    <Btn variant="success" onClick={() => confirmPO(po)}>✓ CONFIRM ORDER</Btn>
+                    <Btn variant="danger" onClick={() => dismissPO(po)}>✕ DISMISS</Btn>
+                    <div style={{ marginLeft:"auto", fontFamily:F.mono, fontSize:9, color:T.textDim }}>Expected delivery: {po.expectedDelivery || "—"}</div>
+                  </div>
+
+                  {po.riskIfDelayed && (
+                    <div style={{ marginTop:10, fontFamily:F.mono, fontSize:10, color:T.red, opacity:.8 }}>⚠ {po.riskIfDelayed}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Confirmed orders log */}
+      {confirmed.length > 0 && (
+        <div style={{ marginBottom:20 }}>
+          <SectionLabel>CONFIRMED THIS SESSION — {confirmed.length} ORDER{confirmed.length>1?"S":""}</SectionLabel>
+          <div style={{ background:`${T.green}08`, border:`1px solid ${T.green}20`, borderRadius:10, padding:"12px 16px" }}>
+            <div style={{ fontFamily:F.mono, fontSize:11, color:T.green }}>✓ {confirmed.length} purchase order{confirmed.length>1?"s":""} confirmed and queued for processing</div>
+          </div>
+        </div>
+      )}
+
+      {/* Scan results */}
+      {scanning && <Spinner label="SCANNING ALL 6 SKUS VIA ML REORDER API…"/>}
+
+      {scanned && (
+        <div>
+          <SectionLabel>SCAN RESULTS — {scanResults.length} SKUS ANALYSED</SectionLabel>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:20 }}>
+            {scanResults.map(item => {
+              if (item.error) return (
+                <div key={item.id} style={{ padding:"14px 16px", background:T.bgCard, border:`1px solid ${T.border}`, borderRadius:10 }}>
+                  <div style={{ fontFamily:F.display, fontSize:13, fontWeight:600, color:T.text }}>{item.name}</div>
+                  <div style={{ fontFamily:F.mono, fontSize:10, color:T.red, marginTop:4 }}>Error: {item.error}</div>
+                </div>
+              );
+              const sc = item.severity === "critical" ? T.red : item.severity === "warning" ? T.amber : T.green;
+              const alreadyDrafted = pendingPOs.some(p => p.skuId === item.id);
+              const isDrafting = drafting[item.id];
+              return (
+                <div key={item.id} style={{ padding:"14px 16px", background:`${sc}08`, border:`1px solid ${sc}25`, borderRadius:10, display:"flex", flexDirection:"column", gap:8 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:2 }}>
+                        <StatusDot color={sc} pulse={item.severity==="critical"}/>
+                        <span style={{ fontFamily:F.display, fontSize:13, fontWeight:700, color:T.text }}>{item.name}</span>
+                      </div>
+                      <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim }}>{item.sku} · {item.warehouse}</div>
+                    </div>
+                    <Badge color={sc}>{item.severity}</Badge>
+                  </div>
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8 }}>
+                    {[["STOCK",`${item.qty}`],["DAYS LEFT",`${item.daysLeft?.toFixed(1)}d`],["REV RISK",`₹${(item.revRisk/1000).toFixed(0)}K`]].map(([l,v]) => (
+                      <div key={l}><div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, letterSpacing:1 }}>{l}</div><div style={{ fontFamily:F.display, fontSize:13, fontWeight:700, color:T.text }}>{v}</div></div>
+                    ))}
+                  </div>
+                  {(item.reorder?.reorder_now || item.reorder?.reorder_needed || item.severity !== "normal") && (
+                    <Btn
+                      onClick={() => !alreadyDrafted && !isDrafting && draftPO(item)}
+                      disabled={alreadyDrafted || isDrafting}
+                      style={{ width:"100%", justifyContent:"center" }}
+                      variant={alreadyDrafted ? "ghost" : "primary"}
+                    >
+                      {isDrafting ? <><div style={{ width:10,height:10,borderRadius:"50%",border:`2px solid ${T.cyan}`,borderTopColor:"transparent",animation:"spin 0.7s linear infinite" }}/> CLAUDE DRAFTING PO…</> : alreadyDrafted ? "✓ PO DRAFTED" : "📋 DRAFT PO WITH CLAUDE"}
+                    </Btn>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!scanned && !scanning && (
+        <Panel style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:260, textAlign:"center" }}>
+          <div>
+            <div style={{ fontSize:42, marginBottom:14 }}>📋</div>
+            <div style={{ fontFamily:F.display, fontSize:18, fontWeight:700, color:T.text, marginBottom:8 }}>Autonomous Reorder Agent</div>
+            <div style={{ fontFamily:F.body, fontSize:13, color:T.textMuted, maxWidth:460, lineHeight:1.7 }}>
+              Click <strong style={{ color:T.cyan }}>Scan All SKUs</strong> to poll the ML reorder API for all 6 inventory items.
+              Critical and warning items get Claude-drafted Purchase Orders — you approve or dismiss with one click.
+            </div>
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   NEW FEATURE 2 — EXPIRY DATE TRACKER + LOT MANAGEMENT
+   Each SKU gets expiry_date + lot_id. Daily check: items expiring within
+   lead_time_days + 3 get flagged. Agent models transfer vs markdown via
+   /route + /cost and presents the better option.
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+// Simulated lot data with expiry dates
+const LOT_INVENTORY = [
+  { id:"LOT-001", sku:"STL-ROD-12", name:"Steel Rods 12mm",       warehouse:"Chennai",   qty:340,  daily:12, productId:"PROD_001", lotId:"L-2024-09A", expiryDate:"2026-04-18", leadTime:5 },
+  { id:"LOT-002", sku:"ELC-CAP-22", name:"Electronic Capacitors",  warehouse:"Mumbai",    qty:18,   daily:8,  productId:"PROD_002", lotId:"L-2025-03B", expiryDate:"2026-05-30", leadTime:7 },
+  { id:"LOT-003", sku:"TXT-COT-XL", name:"Cotton Fabric XL",       warehouse:"Ahmedabad", qty:620,  daily:25, productId:"PROD_003", lotId:"L-2025-01C", expiryDate:"2026-04-10", leadTime:4 },
+  { id:"LOT-004", sku:"AUT-BRK-44", name:"Brake Pads Set",         warehouse:"Pune",      qty:9,    daily:4,  productId:"PROD_002", lotId:"L-2024-11D", expiryDate:"2026-07-15", leadTime:7 },
+  { id:"LOT-005", sku:"FDG-RIC-25", name:"Rice (25kg Bags)",       warehouse:"Kolkata",   qty:1200, daily:80, productId:"PROD_003", lotId:"L-2025-02E", expiryDate:"2026-04-08", leadTime:4 },
+  { id:"LOT-006", sku:"CHM-H2SO4",  name:"Sulphuric Acid 98%",     warehouse:"Hyderabad", qty:82,   daily:5,  productId:"PROD_001", lotId:"L-2025-04F", expiryDate:"2026-06-20", leadTime:5 },
+  { id:"LOT-007", sku:"STL-ROD-12", name:"Steel Rods 12mm",        warehouse:"Delhi",     qty:200,  daily:18, productId:"PROD_001", lotId:"L-2025-03G", expiryDate:"2026-04-12", leadTime:5 },
+];
+
+function ExpiryTracker() {
+  const [checking, setChecking]     = useState(false);
+  const [checked, setChecked]       = useState(false);
+  const [flaggedLots, setFlaggedLots] = useState([]);
+  const [analyses, setAnalyses]     = useState({}); // lotId → { transfer, markdown, verdict }
+  const [analyzing, setAnalyzing]   = useState({});
+
+  const TODAY = new Date("2026-04-07");
+
+  const daysUntilExpiry = (expiryStr) => {
+    const exp = new Date(expiryStr);
+    return Math.round((exp - TODAY) / (1000 * 60 * 60 * 24));
+  };
+
+  const runDailyCheck = () => {
+    setChecking(true);
+    setTimeout(() => {
+      const flagged = LOT_INVENTORY.filter(lot => {
+        const days = daysUntilExpiry(lot.expiryDate);
+        return days <= (lot.leadTime + 3) && days >= 0;
+      }).map(lot => ({
+        ...lot,
+        daysToExpiry: daysUntilExpiry(lot.expiryDate),
+        urgency: daysUntilExpiry(lot.expiryDate) <= 2 ? "critical" : daysUntilExpiry(lot.expiryDate) <= 5 ? "high" : "medium",
+      }));
+      flagged.sort((a,b) => a.daysToExpiry - b.daysToExpiry);
+      setFlaggedLots(flagged);
+      setChecked(true);
+      setChecking(false);
+    }, 800);
+  };
+
+  const analyzeOptions = async (lot) => {
+    setAnalyzing(p => ({ ...p, [lot.id]: true }));
+    try {
+      const destHub = NEAREST_HUB[lot.warehouse] || "Mumbai";
+
+      // Get forecast at destination (higher velocity hub)
+      const [routeRes, costRes, forecastDest] = await Promise.allSettled([
+        callAPI("/route", { warehouse: lot.warehouse, delivery_stops: destHub, vehicle_type: "Truck", traffic_condition: "Medium" }),
+        callAPI("/cost", { origin: lot.warehouse, destination: destHub, vehicle_type: "Truck", traffic_condition: "Medium", weight_kg: Math.min(lot.qty * 2, 2000), fuel_price_per_litre: 100, driver_cost: 1500, toll_charges: 500 }),
+        callAPI("/forecast/summary", { product_id: lot.productId, warehouse: destHub, forecast_days: lot.daysToExpiry, is_promotion: 0 }),
+      ]);
+
+      const transferCost = costRes.status === "fulfilled" ? (costRes.value.predicted_cost_inr || 0) : 15000;
+      const unitPrice    = UNIT_PRICES[lot.productId] || 4500;
+      const totalValue   = lot.qty * unitPrice * MARGIN;
+      const transferredValue = totalValue - transferCost;
+
+      // Markdown in place: assume 30% markdown
+      const markdownRate   = 0.30;
+      const markdownValue  = lot.qty * unitPrice * (1 - markdownRate) * MARGIN;
+      const markdownLoss   = totalValue - markdownValue;
+
+      const transferROI    = transferredValue - markdownValue; // positive = transfer wins
+      const recommendation = transferROI > 0 ? "transfer" : "markdown";
+
+      setAnalyses(prev => ({
+        ...prev,
+        [lot.id]: {
+          destHub,
+          transferCost: Math.round(transferCost),
+          transferValue: Math.round(transferredValue),
+          markdownValue: Math.round(markdownValue),
+          markdownLoss: Math.round(markdownLoss),
+          totalValue: Math.round(totalValue),
+          transferROI: Math.round(transferROI),
+          recommendation,
+          route: routeRes.status === "fulfilled" ? routeRes.value.optimized_route : `${lot.warehouse} → ${destHub}`,
+          eta: routeRes.status === "fulfilled" ? routeRes.value.estimated_time : "~8–12 hrs",
+        },
+      }));
+    } catch(e) {
+      console.error(e);
+    }
+    setAnalyzing(p => ({ ...p, [lot.id]: false }));
+  };
+
+  const urgColor = (u) => u === "critical" ? T.red : u === "high" ? T.amber : T.purple;
+
+  return (
+    <div style={{ flex:1, overflow:"auto", padding:"28px 32px", background:T.bg }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:28 }}>
+        <div>
+          <SectionLabel>Agent · Expiry Tracker</SectionLabel>
+          <h2 style={{ fontFamily:F.display, fontSize:26, fontWeight:700, color:T.text }}>Expiry Date Tracker</h2>
+          <p style={{ fontFamily:F.body, color:T.textMuted, fontSize:13, marginTop:4 }}>
+            Daily lot check · Transfer vs markdown modelling · Margin preservation engine
+          </p>
+        </div>
+        <Btn onClick={runDailyCheck} disabled={checking}>{checking ? "CHECKING…" : "⏳ RUN DAILY CHECK"}</Btn>
+      </div>
+
+      {/* Lot inventory table */}
+      <Panel style={{ marginBottom:20, padding:0, overflow:"hidden" }}>
+        <div style={{ padding:"12px 18px", borderBottom:`1px solid ${T.border}`, fontFamily:F.mono, fontSize:9, color:T.textDim, letterSpacing:1.5 }}>ALL LOTS — LOT ID · EXPIRY DATE · STATUS</div>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead>
+            <tr style={{ background:T.bgPanel }}>
+              {["Lot ID","Item","Warehouse","Qty","Expiry Date","Days Left","Status"].map(h => (
+                <th key={h} style={{ textAlign:"left", padding:"9px 16px", fontFamily:F.mono, fontSize:9, color:T.textDim, letterSpacing:1 }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {LOT_INVENTORY.map(lot => {
+              const days = daysUntilExpiry(lot.expiryDate);
+              const flagged = days <= (lot.leadTime + 3);
+              const sc = flagged ? (days <= 2 ? T.red : days <= 5 ? T.amber : T.purple) : T.green;
+              return (
+                <tr key={lot.id} style={{ borderBottom:`1px solid ${T.border}`, background:flagged?`${sc}06`:"transparent" }}>
+                  <td style={{ padding:"11px 16px", fontFamily:F.mono, fontSize:10, fontWeight:600, color:T.cyan }}>{lot.lotId}</td>
+                  <td style={{ padding:"11px 16px", fontFamily:F.display, fontSize:12.5, fontWeight:600, color:T.text }}>{lot.name}</td>
+                  <td style={{ padding:"11px 16px", fontFamily:F.body, fontSize:12, color:T.textMuted }}>{lot.warehouse}</td>
+                  <td style={{ padding:"11px 16px", fontFamily:F.mono, fontSize:11, color:T.text }}>{lot.qty.toLocaleString("en-IN")}</td>
+                  <td style={{ padding:"11px 16px", fontFamily:F.mono, fontSize:11, color:sc, fontWeight:600 }}>{lot.expiryDate}</td>
+                  <td style={{ padding:"11px 16px", fontFamily:F.display, fontSize:14, fontWeight:700, color:sc }}>{days}d</td>
+                  <td style={{ padding:"11px 16px" }}>
+                    {flagged ? <Badge color={sc}>{days<=2?"EXPIRING NOW":days<=5?"URGENT":"FLAGGED"}</Badge> : <Badge color={T.green}>OK</Badge>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </Panel>
+
+      {checking && <Spinner label="RUNNING DAILY EXPIRY CHECK…"/>}
+
+      {checked && (
+        <div>
+          <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:16 }}>
+            <SectionLabel>FLAGGED LOTS — EXPIRING WITHIN LEAD TIME + 3 DAYS</SectionLabel>
+            {flaggedLots.length === 0 && <Badge color={T.green}>ALL LOTS WITHIN SAFE WINDOW</Badge>}
+          </div>
+
+          {flaggedLots.length === 0 && (
+            <Panel style={{ textAlign:"center", padding:32 }}>
+              <div style={{ fontSize:32, marginBottom:10 }}>✅</div>
+              <div style={{ fontFamily:F.display, fontSize:16, fontWeight:700, color:T.green }}>No lots flagged</div>
+              <div style={{ fontFamily:F.body, fontSize:13, color:T.textMuted, marginTop:6 }}>All lots are within their safe window relative to lead time</div>
+            </Panel>
+          )}
+
+          <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+            {flaggedLots.map(lot => {
+              const uc = urgColor(lot.urgency);
+              const analysis = analyses[lot.id];
+              const isAnalyzing = analyzing[lot.id];
+
+              return (
+                <Panel key={lot.id} style={{ borderLeft:`3px solid ${uc}`, animation:"fadeUp .3s ease" }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
+                        <Badge color={uc}>{lot.urgency.toUpperCase()}</Badge>
+                        <span style={{ fontFamily:F.mono, fontSize:10, color:T.textDim }}>{lot.lotId}</span>
+                      </div>
+                      <div style={{ fontFamily:F.display, fontSize:16, fontWeight:700, color:T.text }}>{lot.name}</div>
+                      <div style={{ fontFamily:F.mono, fontSize:10, color:T.textMuted, marginTop:2 }}>
+                        {lot.sku} · {lot.warehouse} · Expires {lot.expiryDate}
+                      </div>
+                    </div>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontFamily:F.display, fontSize:22, fontWeight:700, color:uc }}>{lot.daysToExpiry}d</div>
+                      <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim }}>until expiry</div>
+                    </div>
+                  </div>
+
+                  <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, marginBottom:14 }}>
+                    {[
+                      ["QUANTITY", `${lot.qty.toLocaleString("en-IN")} units`],
+                      ["DAILY VELOCITY", `${lot.daily} u/day`],
+                      ["DAYS COVERAGE", `${(lot.qty/lot.daily).toFixed(1)}d`],
+                      ["TOTAL VALUE", `₹${(lot.qty * (UNIT_PRICES[lot.productId]||4500) * MARGIN / 1000).toFixed(0)}K margin`],
+                    ].map(([l,v]) => (
+                      <div key={l} style={{ background:T.bgPanel, borderRadius:8, padding:"10px 12px" }}>
+                        <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, marginBottom:3, letterSpacing:1 }}>{l}</div>
+                        <div style={{ fontFamily:F.display, fontSize:13, fontWeight:700, color:T.text }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {!analysis && !isAnalyzing && (
+                    <Btn onClick={() => analyzeOptions(lot)} style={{ width:"100%", justifyContent:"center" }}>
+                      🔍 MODEL TRANSFER vs MARKDOWN
+                    </Btn>
+                  )}
+
+                  {isAnalyzing && <div style={{ display:"flex", alignItems:"center", gap:10, padding:"12px 0", fontFamily:F.mono, fontSize:11, color:T.textMuted }}><div style={{ width:14,height:14,borderRadius:"50%",border:`2px solid ${T.cyan}`,borderTopColor:"transparent",animation:"spin 0.7s linear infinite" }}/> Calling /route + /cost, modelling transfer economics…</div>}
+
+                  {analysis && (
+                    <div style={{ animation:"fadeUp .3s ease" }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:14 }}>
+                        {/* Transfer option */}
+                        <div style={{ background: analysis.recommendation==="transfer" ? `${T.green}10` : T.bgPanel, border:`1px solid ${analysis.recommendation==="transfer"?T.green:T.border}`, borderRadius:10, padding:"14px 16px" }}>
+                          <div style={{ fontFamily:F.mono, fontSize:9, color:analysis.recommendation==="transfer"?T.green:T.textDim, fontWeight:700, marginBottom:8, letterSpacing:1.5, display:"flex", justifyContent:"space-between" }}>
+                            <span>🚛 TRANSFER TO {analysis.destHub.toUpperCase()}</span>
+                            {analysis.recommendation==="transfer" && <Badge color={T.green}>RECOMMENDED</Badge>}
+                          </div>
+                          <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginBottom:4 }}>Route: {analysis.route}</div>
+                          <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginBottom:10 }}>ETA: {analysis.eta}</div>
+                          {[
+                            ["Logistics cost", `₹${(analysis.transferCost/1000).toFixed(0)}K`],
+                            ["Net margin retained", `₹${(analysis.transferValue/1000).toFixed(0)}K`],
+                          ].map(([l,v]) => (
+                            <div key={l} style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                              <span style={{ fontFamily:F.body, fontSize:11, color:T.textMuted }}>{l}</span>
+                              <span style={{ fontFamily:F.mono, fontSize:11, fontWeight:700, color:T.text }}>{v}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Markdown option */}
+                        <div style={{ background: analysis.recommendation==="markdown" ? `${T.green}10` : T.bgPanel, border:`1px solid ${analysis.recommendation==="markdown"?T.green:T.border}`, borderRadius:10, padding:"14px 16px" }}>
+                          <div style={{ fontFamily:F.mono, fontSize:9, color:analysis.recommendation==="markdown"?T.green:T.textDim, fontWeight:700, marginBottom:8, letterSpacing:1.5, display:"flex", justifyContent:"space-between" }}>
+                            <span>🏷 MARKDOWN IN PLACE (30%)</span>
+                            {analysis.recommendation==="markdown" && <Badge color={T.green}>RECOMMENDED</Badge>}
+                          </div>
+                          <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginBottom:14 }}>No logistics cost · Sell at {lot.warehouse}</div>
+                          {[
+                            ["Markdown loss vs full price", `₹${(analysis.markdownLoss/1000).toFixed(0)}K`],
+                            ["Net margin retained", `₹${(analysis.markdownValue/1000).toFixed(0)}K`],
+                          ].map(([l,v]) => (
+                            <div key={l} style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+                              <span style={{ fontFamily:F.body, fontSize:11, color:T.textMuted }}>{l}</span>
+                              <span style={{ fontFamily:F.mono, fontSize:11, fontWeight:700, color:T.text }}>{v}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Verdict */}
+                      <div style={{ background:`${analysis.recommendation==="transfer"?T.green:T.cyan}10`, border:`1px solid ${analysis.recommendation==="transfer"?T.green:T.cyan}30`, borderRadius:8, padding:"12px 16px" }}>
+                        <div style={{ fontFamily:F.mono, fontSize:9, color:analysis.recommendation==="transfer"?T.green:T.cyan, marginBottom:4, letterSpacing:1.5 }}>VERDICT</div>
+                        <div style={{ fontFamily:F.body, fontSize:13, color:T.text }}>
+                          {analysis.recommendation === "transfer"
+                            ? `Transfer to ${analysis.destHub} saves ₹${(analysis.transferROI/1000).toFixed(0)}K more margin than markdown in place. Dispatch within ${lot.daysToExpiry - lot.leadTime} days.`
+                            : `Markdown in place retains ₹${(Math.abs(analysis.transferROI)/1000).toFixed(0)}K more than transfer after logistics costs. Apply 30% discount immediately.`
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </Panel>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!checked && !checking && (
+        <Panel style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:260, textAlign:"center" }}>
+          <div>
+            <div style={{ fontSize:42, marginBottom:14 }}>⏳</div>
+            <div style={{ fontFamily:F.display, fontSize:18, fontWeight:700, color:T.text, marginBottom:8 }}>Expiry Date Tracker</div>
+            <div style={{ fontFamily:F.body, fontSize:13, color:T.textMuted, maxWidth:460, lineHeight:1.7 }}>
+              Click <strong style={{ color:T.cyan }}>Run Daily Check</strong> to scan all lots.
+              Items expiring within <code style={{ background:T.bgPanel, padding:"2px 6px", borderRadius:4, color:T.amber }}>lead_time + 3 days</code> are flagged
+              and modelled for transfer vs markdown — only the better option is presented.
+            </div>
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   NEW FEATURE 3 — DEMAND-DRIVEN INTER-HUB TRANSFER OPTIMIZER
+   When hub A is overstocked and hub B is near stockout for the same product,
+   the agent proposes a transfer. Uses /route to get cost, compares against
+   revenue-at-risk at hub B, ranks all transfers by ROI.
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+// Current stock levels for all hubs (used to compute surplus/shortage)
+const HUB_STOCKS = [
+  { warehouse:"Chennai",   productId:"PROD_001", daily:12,  qty:340,  name:"Steel Rods 12mm"       },
+  { warehouse:"Mumbai",    productId:"PROD_002", daily:8,   qty:18,   name:"Electronic Capacitors"  },
+  { warehouse:"Ahmedabad", productId:"PROD_003", daily:25,  qty:620,  name:"Cotton Fabric XL"       },
+  { warehouse:"Pune",      productId:"PROD_002", daily:4,   qty:9,    name:"Brake Pads Set"         },
+  { warehouse:"Kolkata",   productId:"PROD_003", daily:80,  qty:1200, name:"Rice (25kg Bags)"       },
+  { warehouse:"Hyderabad", productId:"PROD_001", daily:5,   qty:82,   name:"Sulphuric Acid 98%"     },
+  { warehouse:"Delhi",     productId:"PROD_001", daily:18,  qty:850,  name:"Steel Rods 12mm"        },
+  { warehouse:"Bangalore", productId:"PROD_002", daily:10,  qty:12,   name:"Electronic Capacitors"  },
+  { warehouse:"Jaipur",    productId:"PROD_003", daily:30,  qty:2400, name:"Cotton Fabric XL"       },
+  { warehouse:"Lucknow",   productId:"PROD_001", daily:15,  qty:120,  name:"Steel Rods 12mm"        },
+];
+
+// Thresholds: overstocked = qty > 30 days of daily, near stockout = qty < 10 days
+const OVERSTOCK_DAYS  = 30;
+const SHORTAGE_DAYS   = 10;
+
+function TransferOptimizer() {
+  const [scanning, setScanning]       = useState(false);
+  const [pairs, setPairs]             = useState([]);       // surplus-shortage pairs
+  const [evaluated, setEvaluated]     = useState([]);      // pairs with ROI
+  const [evaluating, setEvaluating]   = useState(false);
+  const [selected, setSelected]       = useState(null);
+
+  const findPairs = () => {
+    setScanning(true);
+    setPairs([]); setEvaluated([]); setSelected(null);
+
+    setTimeout(() => {
+      const overstocked = HUB_STOCKS.filter(h => (h.qty / h.daily) > OVERSTOCK_DAYS);
+      const nearStockout = HUB_STOCKS.filter(h => (h.qty / h.daily) < SHORTAGE_DAYS);
+
+      const candidatePairs = [];
+      overstocked.forEach(surplus => {
+        nearStockout.forEach(shortage => {
+          if (surplus.productId === shortage.productId && surplus.warehouse !== shortage.warehouse) {
+            const surplusDays = surplus.qty / surplus.daily;
+            const shortageDays = shortage.qty / shortage.daily;
+            const transferableQty = Math.floor((surplusDays - SHORTAGE_DAYS) * surplus.daily * 0.7);
+            const revRisk = calcRevenueAtRisk(shortageDays, shortage.daily, shortage.productId);
+            candidatePairs.push({
+              id: `${surplus.warehouse}-${shortage.warehouse}-${surplus.productId}`,
+              surplus,
+              shortage,
+              surplusDays: surplusDays.toFixed(1),
+              shortageDays: shortageDays.toFixed(1),
+              transferableQty,
+              revRisk,
+              product: surplus.name,
+              productId: surplus.productId,
+            });
+          }
+        });
+      });
+      candidatePairs.sort((a,b) => b.revRisk - a.revRisk);
+      setPairs(candidatePairs);
+      setScanning(false);
+    }, 600);
+  };
+
+  const evaluateAll = async () => {
+    if (pairs.length === 0) return;
+    setEvaluating(true);
+    const results = [];
+    await Promise.allSettled(pairs.map(async pair => {
+      try {
+        const [routeRes, costRes] = await Promise.all([
+          callAPI("/route", {
+            warehouse: pair.surplus.warehouse,
+            delivery_stops: pair.shortage.warehouse,
+            vehicle_type: "Truck",
+            traffic_condition: "Medium",
+          }),
+          callAPI("/cost", {
+            origin: pair.surplus.warehouse,
+            destination: pair.shortage.warehouse,
+            vehicle_type: "Truck",
+            traffic_condition: "Medium",
+            weight_kg: Math.min(pair.transferableQty * 5, 5000),
+            fuel_price_per_litre: 100,
+            driver_cost: 1500,
+            toll_charges: 500,
+          }),
+        ]);
+        const transferCost = costRes.predicted_cost_inr || 0;
+        const roi = Math.round((pair.revRisk - transferCost) / transferCost * 100);
+        const justified = pair.revRisk > transferCost;
+        results.push({
+          ...pair,
+          transferCost: Math.round(transferCost),
+          route: routeRes.optimized_route || `${pair.surplus.warehouse} → ${pair.shortage.warehouse}`,
+          distance: routeRes.total_distance_km,
+          eta: routeRes.estimated_time,
+          roi,
+          justified,
+          verdict: roi > 200 ? "HIGH PRIORITY" : roi > 50 ? "RECOMMENDED" : roi > 0 ? "MARGINAL" : "NOT JUSTIFIED",
+          verdictColor: roi > 200 ? T.red : roi > 50 ? T.green : roi > 0 ? T.amber : T.textMuted,
+        });
+      } catch(e) {
+        results.push({ ...pair, error: e.message, roi: 0, justified: false, verdict: "ERROR", verdictColor: T.textDim });
+      }
+    }));
+    results.sort((a,b) => b.roi - a.roi);
+    setEvaluated(results);
+    setEvaluating(false);
+  };
+
+  const displayList = evaluated.length > 0 ? evaluated : pairs;
+
+  return (
+    <div style={{ flex:1, overflow:"auto", padding:"28px 32px", background:T.bg }}>
+      {/* Header */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:28 }}>
+        <div>
+          <SectionLabel>Agent · Inter-Hub Transfer</SectionLabel>
+          <h2 style={{ fontFamily:F.display, fontSize:26, fontWeight:700, color:T.text }}>Transfer Optimizer</h2>
+          <p style={{ fontFamily:F.body, color:T.textMuted, fontSize:13, marginTop:4 }}>
+            Surplus → shortage matching · ROI-ranked transfer proposals · Closes the surplus-stockout loop
+          </p>
+        </div>
+        <div style={{ display:"flex", gap:10 }}>
+          <Btn onClick={findPairs} disabled={scanning} variant="ghost">
+            {scanning ? "SCANNING…" : "⇄ FIND SURPLUS/SHORTAGE PAIRS"}
+          </Btn>
+          {pairs.length > 0 && (
+            <Btn onClick={evaluateAll} disabled={evaluating}>
+              {evaluating ? <><div style={{ width:10,height:10,borderRadius:"50%",border:`2px solid ${T.cyan}`,borderTopColor:"transparent",animation:"spin 0.7s linear infinite" }}/> EVALUATING…</> : "₹ EVALUATE ROI FOR ALL PAIRS"}
+            </Btn>
+          )}
+        </div>
+      </div>
+
+      {/* Hub stock overview */}
+      <Panel style={{ marginBottom:20 }}>
+        <SectionLabel>HUB STOCK OVERVIEW — ALL 10 WAREHOUSES</SectionLabel>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:8 }}>
+          {HUB_STOCKS.map(hub => {
+            const days = hub.qty / hub.daily;
+            const isOver  = days > OVERSTOCK_DAYS;
+            const isShort = days < SHORTAGE_DAYS;
+            const sc = isShort ? T.red : isOver ? T.purple : T.green;
+            return (
+              <div key={hub.warehouse+hub.productId} style={{ background:`${sc}08`, border:`1px solid ${sc}20`, borderRadius:8, padding:"10px 12px" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:4 }}>
+                  <span style={{ fontFamily:F.display, fontSize:11, fontWeight:700, color:T.text }}>{hub.warehouse}</span>
+                  <Badge color={sc} style={{ fontSize:8 }}>{isShort?"SHORT":isOver?"OVER":"OK"}</Badge>
+                </div>
+                <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, marginBottom:4 }}>{hub.productId}</div>
+                <div style={{ fontFamily:F.display, fontSize:16, fontWeight:700, color:sc }}>{days.toFixed(0)}d</div>
+                <div style={{ fontFamily:F.mono, fontSize:9, color:T.textMuted }}>{hub.qty} units @ {hub.daily}/day</div>
+                <div style={{ marginTop:6, background:`${sc}20`, borderRadius:20, height:3 }}>
+                  <div style={{ width:`${Math.min(100, days/60*100)}%`, height:"100%", background:sc, borderRadius:20 }}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{ display:"flex", gap:20, marginTop:12, fontFamily:F.mono, fontSize:10, color:T.textMuted }}>
+          <span><span style={{ color:T.red }}>■</span> Short (&lt;{SHORTAGE_DAYS}d)</span>
+          <span><span style={{ color:T.purple }}>■</span> Overstocked (&gt;{OVERSTOCK_DAYS}d)</span>
+          <span><span style={{ color:T.green }}>■</span> Healthy</span>
+        </div>
+      </Panel>
+
+      {scanning && <Spinner label="IDENTIFYING SURPLUS-SHORTAGE PAIRS…"/>}
+
+      {pairs.length > 0 && !scanning && (
+        <div>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:14 }}>
+            <SectionLabel>{evaluated.length > 0 ? `${evaluated.length} PAIRS RANKED BY ROI` : `${pairs.length} TRANSFER OPPORTUNITIES FOUND`}</SectionLabel>
+            {evaluating && <Spinner small/>}
+          </div>
+
+          {/* Ranked list */}
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {displayList.map((pair, i) => {
+              const isEval = "roi" in pair && "transferCost" in pair;
+              const vc = pair.verdictColor || T.textMuted;
+              const isSel = selected?.id === pair.id;
+              return (
+                <div key={pair.id} onClick={() => setSelected(isSel ? null : pair)} style={{ background: isSel ? `${T.cyan}08` : T.bgCard, border:`1px solid ${isSel?T.cyan:T.border}`, borderRadius:12, padding:"16px 18px", cursor:"pointer", animation:`fadeUp .3s ease ${i*0.06}s both`, transition:"all .2s" }}>
+                  <div style={{ display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr 1fr", gap:12, alignItems:"center" }}>
+                    {/* Route */}
+                    <div>
+                      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                        {isEval && <span style={{ fontFamily:F.mono, fontSize:11, fontWeight:700, color:vc }}>#{i+1}</span>}
+                        <div style={{ fontFamily:F.display, fontSize:13, fontWeight:700, color:T.text }}>
+                          {pair.surplus.warehouse} <span style={{ color:T.cyan }}>→</span> {pair.shortage.warehouse}
+                        </div>
+                      </div>
+                      <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim }}>{pair.product} · {pair.productId}</div>
+                      {isEval && pair.route && <div style={{ fontFamily:F.mono, fontSize:9, color:T.textMuted, marginTop:2 }}>{pair.route}</div>}
+                    </div>
+
+                    {/* Surplus stock */}
+                    <div>
+                      <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, marginBottom:2, letterSpacing:1 }}>SURPLUS AT</div>
+                      <div style={{ fontFamily:F.display, fontSize:13, fontWeight:700, color:T.purple }}>{pair.surplusDays}d</div>
+                      <div style={{ fontFamily:F.mono, fontSize:9, color:T.textMuted }}>{pair.surplus.warehouse}</div>
+                    </div>
+
+                    {/* Shortage */}
+                    <div>
+                      <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, marginBottom:2, letterSpacing:1 }}>SHORTAGE AT</div>
+                      <div style={{ fontFamily:F.display, fontSize:13, fontWeight:700, color:T.red }}>{pair.shortageDays}d</div>
+                      <div style={{ fontFamily:F.mono, fontSize:9, color:T.textMuted }}>{pair.shortage.warehouse}</div>
+                    </div>
+
+                    {/* Revenue at risk */}
+                    <div>
+                      <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, marginBottom:2, letterSpacing:1 }}>REV AT RISK</div>
+                      <div style={{ fontFamily:F.display, fontSize:13, fontWeight:700, color:T.red }}>₹{(pair.revRisk/1000).toFixed(0)}K</div>
+                      {isEval && <div style={{ fontFamily:F.mono, fontSize:9, color:T.textMuted }}>Cost: ₹{(pair.transferCost/1000).toFixed(0)}K</div>}
+                    </div>
+
+                    {/* ROI / verdict */}
+                    <div style={{ textAlign:"right" }}>
+                      {isEval ? (
+                        <>
+                          <div style={{ fontFamily:F.display, fontSize:18, fontWeight:700, color:vc }}>
+                            {pair.roi > 0 ? "+" : ""}{pair.roi}%
+                          </div>
+                          <Badge color={vc}>{pair.verdict}</Badge>
+                        </>
+                      ) : (
+                        <span style={{ fontFamily:F.mono, fontSize:10, color:T.textDim }}>Not evaluated</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Expanded detail */}
+                  {isSel && isEval && (
+                    <div style={{ marginTop:16, paddingTop:16, borderTop:`1px solid ${T.border}`, animation:"fadeUp .2s ease" }}>
+                      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:10, marginBottom:14 }}>
+                        {[
+                          ["TRANSFERABLE QTY", `${pair.transferableQty?.toLocaleString("en-IN")} units`],
+                          ["LOGISTICS COST", `₹${(pair.transferCost/1000).toFixed(1)}K`],
+                          ["DISTANCE", pair.distance ? `${pair.distance} km` : "—"],
+                          ["ETA", pair.eta || "—"],
+                        ].map(([l,v]) => (
+                          <div key={l} style={{ background:T.bgPanel, borderRadius:8, padding:"10px 12px" }}>
+                            <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, marginBottom:3, letterSpacing:1 }}>{l}</div>
+                            <div style={{ fontFamily:F.display, fontSize:13, fontWeight:700, color:T.text }}>{v}</div>
+                          </div>
+                        ))}
+                      </div>
+                      <div style={{ background:`${vc}10`, border:`1px solid ${vc}30`, borderRadius:8, padding:"12px 16px" }}>
+                        <div style={{ fontFamily:F.mono, fontSize:9, color:vc, marginBottom:4, letterSpacing:1.5 }}>RECOMMENDATION</div>
+                        <div style={{ fontFamily:F.body, fontSize:13, color:T.text }}>
+                          {pair.justified
+                            ? `Transfer ${pair.transferableQty?.toLocaleString("en-IN")} units of ${pair.product} from ${pair.surplus.warehouse} to ${pair.shortage.warehouse}. Revenue protection (₹${(pair.revRisk/1000).toFixed(0)}K) exceeds logistics cost (₹${(pair.transferCost/1000).toFixed(0)}K) by ${pair.roi}% ROI.`
+                            : `Transfer economics are negative (ROI ${pair.roi}%). Logistics cost (₹${(pair.transferCost/1000).toFixed(0)}K) exceeds revenue at risk (₹${(pair.revRisk/1000).toFixed(0)}K). Consider emergency supplier reorder at ${pair.shortage.warehouse} instead.`
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {evaluated.length > 0 && (
+            <div style={{ marginTop:16, padding:"14px 20px", background:T.bgPanel, border:`1px solid ${T.borderAcc}`, borderRadius:12, display:"flex", justifyContent:"space-between", alignItems:"center", boxShadow:`0 0 20px ${T.cyanGlow}` }}>
+              <div style={{ fontFamily:F.mono, fontSize:10, color:T.textDim, letterSpacing:1.5 }}>{evaluated.length} PAIRS EVALUATED</div>
+              <div style={{ display:"flex", gap:24 }}>
+                {[
+                  ["HIGH PRIORITY", evaluated.filter(e=>e.verdict==="HIGH PRIORITY").length.toString(), T.red],
+                  ["RECOMMENDED", evaluated.filter(e=>e.verdict==="RECOMMENDED").length.toString(), T.green],
+                  ["TOTAL REV SAVED", `₹${(evaluated.filter(e=>e.justified).reduce((s,e)=>(s+e.revRisk-e.transferCost),0)/1000).toFixed(0)}K`, T.cyan],
+                ].map(([l,v,c]) => (
+                  <div key={l} style={{ textAlign:"center" }}>
+                    <div style={{ fontFamily:F.display, fontSize:18, fontWeight:700, color:c }}>{v}</div>
+                    <div style={{ fontFamily:F.mono, fontSize:9, color:T.textDim, letterSpacing:1 }}>{l}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {pairs.length === 0 && !scanning && (
+        <Panel style={{ display:"flex", alignItems:"center", justifyContent:"center", minHeight:260, textAlign:"center" }}>
+          <div>
+            <div style={{ fontSize:42, marginBottom:14 }}>⇄</div>
+            <div style={{ fontFamily:F.display, fontSize:18, fontWeight:700, color:T.text, marginBottom:8 }}>Transfer Optimizer</div>
+            <div style={{ fontFamily:F.body, fontSize:13, color:T.textMuted, maxWidth:480, lineHeight:1.7 }}>
+              Click <strong style={{ color:T.cyan }}>Find Surplus/Shortage Pairs</strong> to identify hubs where the same product has surplus
+              at one location and near-stockout at another. Then evaluate ROI to get ranked transfer proposals.
+            </div>
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
 /* ─── SIDEBAR ─────────────────────────────────────────────────────────────────── */
 function Sidebar({ active, onNav, user, onLogout }) {
   return (
     <div style={{ width:220, background:T.bgPanel, display:"flex", flexDirection:"column", height:"100vh", flexShrink:0, borderRight:`1px solid ${T.border}`, position:"relative" }}>
-      {/* Scan accent */}
       <div style={{ position:"absolute", top:0, left:0, width:"100%", height:1, background:`linear-gradient(90deg, transparent, ${T.cyan}40, transparent)` }}/>
-
       <div style={{ padding:"22px 18px 16px", borderBottom:`1px solid ${T.border}` }}>
         <div style={{ display:"flex", alignItems:"center", gap:10 }}>
           <div style={{ width:32, height:32, borderRadius:8, background:`${T.cyan}12`, border:`1px solid ${T.cyan}30`, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>⛓</div>
-          <div>
-            <div style={{ fontFamily:F.display, color:T.text, fontWeight:700, fontSize:12 }}>Resilience AI</div>
-            <div style={{ fontFamily:F.mono, color:T.textDim, fontSize:8, letterSpacing:2 }}>PAN INDIA</div>
-          </div>
+          <div><div style={{ fontFamily:F.display, color:T.text, fontWeight:700, fontSize:12 }}>Resilience AI</div><div style={{ fontFamily:F.mono, color:T.textDim, fontSize:8, letterSpacing:2 }}>PAN INDIA</div></div>
         </div>
       </div>
 
       <div style={{ padding:"14px 10px", flex:1, overflowY:"auto" }}>
-        <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, letterSpacing:2, padding:"0 10px", marginBottom:10 }}>NAVIGATION</div>
-        {NAV.map(n => {
+        <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, letterSpacing:2, padding:"0 10px", marginBottom:6 }}>INTELLIGENCE</div>
+        {NAV.filter(n => !n.isNew).map(n => {
           const on = active===n.id;
           return (
             <div key={n.id} onClick={() => onNav(n.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderRadius:8, marginBottom:2, cursor:"pointer", background:on?`${T.cyan}10`:"transparent", borderLeft:on?`2px solid ${T.cyan}`:"2px solid transparent", transition:"all .15s" }}
@@ -1386,6 +2212,23 @@ function Sidebar({ active, onNav, user, onLogout }) {
               <span style={{ fontSize:13, color:on?T.cyan:T.textMuted, width:16, textAlign:"center", fontFamily:F.mono }}>{n.icon}</span>
               <span style={{ fontFamily:F.body, fontSize:12.5, color:on?T.text:T.textMuted, fontWeight:on?600:400, flex:1 }}>{n.label}</span>
               {on && <div style={{ width:4, height:4, borderRadius:"50%", background:T.cyan, animation:"glow 2s infinite" }}/>}
+            </div>
+          );
+        })}
+
+        <div style={{ fontFamily:F.mono, fontSize:8, color:T.textDim, letterSpacing:2, padding:"8px 10px 4px", marginTop:8, borderTop:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:6 }}>
+          <span>AGENT FEATURES</span>
+          <span style={{ background:`${T.cyan}20`, color:T.cyan, fontFamily:F.mono, fontSize:7, letterSpacing:1, padding:"1px 5px", borderRadius:3 }}>NEW</span>
+        </div>
+        {NAV.filter(n => n.isNew).map(n => {
+          const on = active===n.id;
+          return (
+            <div key={n.id} onClick={() => onNav(n.id)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 12px", borderRadius:8, marginBottom:2, cursor:"pointer", background:on?`${T.purple}10`:"transparent", borderLeft:on?`2px solid ${T.purple}`:"2px solid transparent", transition:"all .15s" }}
+              onMouseOver={e => !on && (e.currentTarget.style.background=T.bgCardHi)}
+              onMouseOut={e => !on && (e.currentTarget.style.background="transparent")}>
+              <span style={{ fontSize:13, color:on?T.purple:T.textMuted, width:16, textAlign:"center", fontFamily:F.mono }}>{n.icon}</span>
+              <span style={{ fontFamily:F.body, fontSize:12.5, color:on?T.text:T.textMuted, fontWeight:on?600:400, flex:1 }}>{n.label}</span>
+              {on && <div style={{ width:4, height:4, borderRadius:"50%", background:T.purple, animation:"glow 2s infinite" }}/>}
             </div>
           );
         })}
@@ -1415,6 +2258,9 @@ function MainLayout({ user, onLogout }) {
       case "stockout": return <StockoutShield/>;
       case "revenue":  return <RevenueGuard/>;
       case "agent":    return <ResilienceAgent/>;
+      case "reorder":  return <ReorderAgent/>;
+      case "expiry":   return <ExpiryTracker/>;
+      case "transfer": return <TransferOptimizer/>;
       default:         return <CommandCenter onNav={setPage}/>;
     }
   };
